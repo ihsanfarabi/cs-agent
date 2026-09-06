@@ -59,8 +59,10 @@ dotnet tool install -g cs-agent --add-source <packed nupkg dir>   # or: dotnet r
 export CS_AGENT_MODEL_KEY=sk-or-...
 export CS_AGENT_BASE_URL=https://your-endpoint/v1   # optional — only if NOT OpenRouter
 
-# 2. ingest your docs (local .md/.html; fixtures/ is the built-in eval corpus)
+# 2. ingest your docs (local .md/.html path, or crawl a docs site by URL;
+#    fixtures/ is the built-in eval corpus)
 cs-agent ingest ./your-docs
+cs-agent ingest https://docs.example.com
 
 # 3. ask — every answer is verified claim-by-claim before it prints
 cs-agent ask "How do I rotate my API key?"
@@ -77,6 +79,28 @@ in both draft and verify roles. Override with `CS_AGENT_DRAFT_MODEL` /
 
 Configuration is env vars only — `CS_AGENT_MODEL_KEY` is the only required one.
 The full list lives in `src/CsAgent.Core/CsAgentConfig.cs`.
+
+### URL ingest mode
+
+`cs-agent ingest https://docs.example.com` crawls the site's HTML and ingests
+markdown-converted content into a host-derived corpus (`docs.example.com` →
+`cs-agent-docs-example-com.db`). Same-domain only, ≤ 200 pages, depth ≤ 3,
+≥ 1 request/second, HTML only (JavaScript-rendered sites are out of scope in
+v1). robots.txt is fetched and obeyed — `User-agent: *` plus an explicit
+`cs-agent` group, prefix `Disallow` matching (no wildcards or `Allow` in v1);
+an absent robots.txt allows, a 5xx robots.txt fails closed with no fetches.
+`<meta name="robots" content="noindex">` pages are skipped.
+
+Re-running the same URL resumes: pages already in the store are skipped
+without re-fetching, so a killed crawl continues at the unvisited pages.
+Refreshing changed content means deleting the corpus `.db` and re-ingesting
+(same recipe as a chunking-config change) — a resume never re-fetches.
+
+**Trust boundary:** chunk text is untrusted input, doubly so for crawled
+corpora. Prompts delimit chunk data and instruct the models to treat it as
+data, never instructions — hardening makes corpus poisoning harder, not
+impossible. A fully malicious corpus can still steer retrieval and force
+escalations.
 
 ## The result object
 
@@ -185,8 +209,7 @@ installable product with an eval harness.
    held-out set above, which stays one-shot (missed questions get replaced,
    not re-tuned).
 
-Deferred work: a CI eval gate (GitHub Actions running `eval` per PR), URL
-crawling for ingest, an HTTP API, Docker packaging, Postgres storage, and
+Deferred work: an HTTP API, Docker packaging, Postgres storage, and
 escalation-with-actions (the escalation path gaining MAF tool-calling so a
 "cannot answer" can open a ticket or notify a human).
 
