@@ -31,4 +31,9 @@
     <None Include="..\..\fixtures\**\*" Link="fixtures\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <!-- Kestrel fixture server for crawler integration tests -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
 </Project>
