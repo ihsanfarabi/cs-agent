@@ -14,8 +14,10 @@ export CS_AGENT_EMBEDDING_MODEL=text-embedding-3-small     # default
 # export CS_AGENT_DRAFT_MODEL=deepseek/deepseek-v4-flash-0731
 # export CS_AGENT_VERIFY_MODEL=deepseek/deepseek-v4-flash-0731
 
-# 2. ingest your docs (local .md/.html; `fixtures` is the built-in eval corpus)
+# 2. ingest your docs (local .md/.html path, or crawl a docs site by URL;
+#    `fixtures` is the built-in eval corpus)
 cs-agent ingest ./your-docs
+cs-agent ingest https://docs.example.com   # same-domain HTML crawl, robots.txt obeyed
 
 # 3. ask — every answer is verified claim-by-claim before it prints
 cs-agent ask "How do I rotate my API key?"
