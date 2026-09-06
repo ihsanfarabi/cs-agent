@@ -8,7 +8,7 @@ on:
 jobs:
   live-eval:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 45  # observed 15 min for tuning alone on slow provider days; 25 cancelled a held-out run mid-eval
     env:
       CS_AGENT_MODEL_KEY: ${{ secrets.CS_AGENT_MODEL_KEY }}
     steps:

@@ -8,8 +8,7 @@ namespace CsAgent.Core;
 public sealed record CrawlResult(
     IReadOnlyList<LoadedPage> Pages,
     IReadOnlyList<string> Skipped,
-    int Fetched,
-    int SkippedKnown);
+    int Fetched);
 
 public sealed record CrawledPage(string Markdown, bool NoIndex);
 
@@ -21,6 +20,11 @@ public sealed record CrawledPage(string Markdown, bool NoIndex);
 /// wins; robots itself is fetched once and does not count). robots 5xx or
 /// unreachable fails closed — zero page fetches. Constructor takes overrides
 /// for tests only; production always uses the constants.
+///
+/// Resume is PIPELINE-level (D8, 2026-09-06): a re-crawl re-fetches HTML
+/// (links must be re-walked to rebuild the frontier) and IngestPipeline's
+/// content-hash check skips re-embedding unchanged pages — same pattern as
+/// path mode.
 /// </summary>
 public sealed class HtmlCrawler
 {
@@ -42,17 +46,14 @@ public sealed class HtmlCrawler
         _maxPages = maxPages;
     }
 
-    public CrawlResult Crawl(Uri seed, Func<string, bool>? alreadyIngested = null, Action<string>? progress = null) =>
-        CrawlAsync(seed, alreadyIngested, progress).GetAwaiter().GetResult();
+    public CrawlResult Crawl(Uri seed, Action<string>? progress = null) =>
+        CrawlAsync(seed, progress).GetAwaiter().GetResult();
 
-    public async Task<CrawlResult> CrawlAsync(
-        Uri seed, Func<string, bool>? alreadyIngested = null, Action<string>? progress = null)
+    public async Task<CrawlResult> CrawlAsync(Uri seed, Action<string>? progress = null)
     {
         if (seed.Scheme is not ("http" or "https"))
             throw new CsAgentException(new CsAgentError("crawl", "bad-url",
                 $"Crawl seed must be http(s): '{seed}'."));
-        alreadyIngested ??= _ => false;
-
         var host = seed.Host;
         var rules = await FetchRobotsAsync(seed);
         var interval = rules.CrawlDelay is { } delay && delay > _minInterval ? delay : _minInterval;
@@ -66,7 +67,6 @@ public sealed class HtmlCrawler
         queue.Enqueue((start, 0));
 
         var fetched = 0;
-        var skippedKnown = 0;
         var lastRequest = DateTimeOffset.MinValue;
 
         while (queue.Count > 0 && fetched < _maxPages)
@@ -74,12 +74,6 @@ public sealed class HtmlCrawler
             var (url, depth) = queue.Dequeue();
             var urlString = url.ToString();
 
-            if (alreadyIngested(urlString))
-            {
-                // resume: already in the store — no fetch, no link extraction
-                skippedKnown++;
-                continue;
-            }
             if (!rules.IsAllowed(url.AbsolutePath))
             {
                 skipped.Add($"{urlString} — robots.txt Disallow");
@@ -145,7 +139,7 @@ public sealed class HtmlCrawler
         if (fetched == _maxPages && queue.Count > 0)
             skipped.Add($"crawl stopped at {_maxPages}-page cap ({queue.Count} URLs not fetched)");
 
-        return new CrawlResult(pages, skipped, fetched, skippedKnown);
+        return new CrawlResult(pages, skipped, fetched);
     }
 
     internal static string CorpusNameFromHost(string host) => host.Replace('.', '-');

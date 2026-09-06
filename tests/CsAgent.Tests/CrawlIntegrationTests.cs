@@ -108,24 +108,33 @@ public sealed class CrawlIntegrationTests : IDisposable
     }
 
     [Fact]
-    public void Crawl_Resume_DoesNotRefetchKnownUrls()
+    public void Crawl_Reproducible_PipelineResumesWithoutReembedding()
     {
         using var server = new CrawlServer(
             new CrawlServer.Route("/", Page("Home", "<a href='/a'>a</a>")),
             new CrawlServer.Route("/a", Page("A", "")));
 
+        // D8: resume is pipeline-level — the crawl re-walks (same pages both
+        // times), and the second ingest resumes every page by content hash
         var first = new HtmlCrawler(TimeSpan.Zero).Crawl(new Uri(server.BaseUrl + "/"));
-        Assert.Equal(2, first.Fetched);
+        var second = new HtmlCrawler(TimeSpan.Zero).Crawl(new Uri(server.BaseUrl + "/"));
+        Assert.Equal(first.Pages.Select(p => p.Key).OrderBy(k => k),
+            second.Pages.Select(p => p.Key).OrderBy(k => k));
 
-        var known = first.Pages.Select(p => p.Key).ToHashSet(StringComparer.Ordinal);
-        var hitsBefore = server.Hits.Count(h => h.Path != "/robots.txt");
-        var second = new HtmlCrawler(TimeSpan.Zero).Crawl(
-            new Uri(server.BaseUrl + "/"), alreadyIngested: known.Contains);
-        // spec semantics: the known seed is skipped without re-fetch AND its
-        // links are not re-extracted, so /a is never re-visited (SkippedKnown 1)
-        Assert.Equal(1, second.SkippedKnown);
-        Assert.Equal(0, second.Fetched);
-        Assert.Equal(hitsBefore, server.Hits.Count(h => h.Path != "/robots.txt")); // only robots re-hit
+        var embeddings = new FakeEmbeddingGenerator();
+        using (var store = new SqliteVectorStore(_dbPath, "fake-embedding"))
+        {
+            new IngestPipeline(embeddings, store, chunkSize: 1200, chunkOverlap: 150)
+                .Run(new LoadReport(first.Pages, first.Skipped), "crawl-test");
+        }
+        using (var store = new SqliteVectorStore(_dbPath, "fake-embedding"))
+        {
+            var summary = new IngestPipeline(embeddings, store, chunkSize: 1200, chunkOverlap: 150)
+                .Run(new LoadReport(second.Pages, second.Skipped), "crawl-test");
+            Assert.Equal(2, summary.PagesResumed);
+            Assert.Equal(0, summary.PagesIngested);
+            Assert.Equal(0, summary.ChunksEmbedded);
+        }
     }
 
     [Fact]

@@ -58,11 +58,11 @@ public static class CsAgentRuntime
         IEmbeddingGenerator<string, Embedding<float>> embeddings =
             client.GetEmbeddingClient(cfg.EmbeddingModel).AsIEmbeddingGenerator();
         using var store = new SqliteVectorStore(resolvedStore, cfg.EmbeddingModel);
-        var known = store.IngestedPaths();
 
-        // resume semantics: ingested URLs are skipped without re-fetch — a
-        // killed crawl resumes at the unvisited pages, not the whole corpus
-        var crawl = new HtmlCrawler().Crawl(seed, known.Contains);
+        // pipeline-level resume (D8): the crawl re-walks links (fetch), then
+        // IngestPipeline's content-hash check skips re-embedding unchanged
+        // pages — a killed ingest resumes at the unvisited pages
+        var crawl = new HtmlCrawler().Crawl(seed);
         if (crawl.Pages.Count == 0)
             throw new CsAgentException(new CsAgentError("crawl", "no-crawlable-pages",
                 $"Crawled 0 pages from '{url}'. " +
@@ -71,12 +71,8 @@ public static class CsAgentRuntime
                     : "No same-host HTML pages found.")));
 
         var pipeline = new IngestPipeline(embeddings, store, cfg.ChunkSize, cfg.ChunkOverlap);
-        var ingested = pipeline.Run(new LoadReport(crawl.Pages, crawl.Skipped), corpusName);
-        var summary = ingested with
-        {
-            StorePath = resolvedStore,
-            PagesResumed = ingested.PagesResumed + crawl.SkippedKnown
-        };
+        var summary = pipeline.Run(new LoadReport(crawl.Pages, crawl.Skipped), corpusName)
+            with { StorePath = resolvedStore };
         CorpusPointer.Update(resolvedStore);
         return summary;
     }

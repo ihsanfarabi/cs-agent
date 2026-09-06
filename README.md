@@ -91,10 +91,11 @@ v1). robots.txt is fetched and obeyed — `User-agent: *` plus an explicit
 an absent robots.txt allows, a 5xx robots.txt fails closed with no fetches.
 `<meta name="robots" content="noindex">` pages are skipped.
 
-Re-running the same URL resumes: pages already in the store are skipped
-without re-fetching, so a killed crawl continues at the unvisited pages.
-Refreshing changed content means deleting the corpus `.db` and re-ingesting
-(same recipe as a chunking-config change) — a resume never re-fetches.
+Re-running the same URL resumes at the pipeline level: the crawl re-walks the
+site's links (HTTP fetch, same 1 req/s pace), and pages whose content hash is
+unchanged are skipped without re-embedding — a killed ingest continues at the
+unvisited pages. Changed page content is picked up automatically by the same
+hash check; deleting the corpus `.db` is only needed to re-embed from scratch.
 
 **Trust boundary:** chunk text is untrusted input, doubly so for crawled
 corpora. Prompts delimit chunk data and instruct the models to treat it as
