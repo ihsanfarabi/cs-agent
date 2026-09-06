@@ -109,10 +109,28 @@ unanswerable escalated, proxy 0 — `eval` exits 1 on a miss (honest-fail).
 | qwen/qwen3.8-flash (both roles) | 20/20 | 5/5 | 0 | 0.95 |
 | inclusionai/ling-3.0-flash-fin (both roles) | 19/20 | 5/5 | 0 | 0.88 |
 
+### Held-out set (generalization check)
+
+A second fixture of 20 questions (`fixtures/questions-heldout.jsonl` — 16
+answerable, 4 unanswerable) was authored after the verifier prompts were
+locked, and never influenced them. Run with `cs-agent eval --heldout`.
+
+| Draft + verify pair | Answerable | Unanswerable | Proxy | Citation Jaccard |
+|---|---|---|---|---|
+| deepseek-v4-flash-0731 (both roles) *(default)* | 16/16 | 4/4 | 0 | 0.97 |
+
+One live run, 2026-09-06 (the `live-eval` workflow, which gates both sets). A
+local run of the same pair scored 15/16 with one sampling-variance miss — the
+same non-determinism the caveat below records. **One-shot rule:** if a future
+change misses a held-out question, fix the prompt or model and REPLACE that
+question with a fresh one — a question tuned against its own miss is in-sample
+from that moment. The gate for both sets is the same honest-fail exit code.
+
 Caveats, stated plainly:
 
-- **In-sample eval.** The same 25 questions tune the prompts and produce these
-  numbers. A held-out set is the first upgrade once the fixture grows.
+- **Tuning set is in-sample.** The 25-question table above is tuning-set
+  scores — the prompts were iterated against those exact questions. The
+  held-out table measures generalization; the tuning table measures fit.
 - **Single-run pairs.** The gpt-4o pair held across six fresh eval runs; the
   cheaper pairs have one or two runs each. OpenRouter does not guarantee
   temperature-0 determinism, and one qwen run showed a single-question flake
@@ -163,7 +181,9 @@ installable product with an eval harness.
    per-call token usage is captured yet.
 2. **Plain top-k search** — no reranking or hybrid retrieval.
 3. **Hallucination proxy undercounts** — see caveats above.
-4. **In-sample eval** — see caveats above.
+4. **Tuning-set numbers are in-sample** — generalization is measured by the
+   held-out set above, which stays one-shot (missed questions get replaced,
+   not re-tuned).
 
 Deferred work: a CI eval gate (GitHub Actions running `eval` per PR), URL
 crawling for ingest, an HTTP API, Docker packaging, Postgres storage, and

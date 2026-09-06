@@ -48,9 +48,10 @@ the fixture.
 3. **Hallucination proxy undercounts** — counts zero-overlap resolutions only;
    reproducible by design, independent of the live verifier. Upgrade trigger:
    post-publish, alongside reranking.
-4. **In-sample eval** — same 25 questions tune the prompts and produce the
-   published numbers; README discloses. Upgrade trigger: add a held-out set
-   when fixture grows.
+4. **Tuning-set numbers in-sample** — the 25-question table is tuning-set fit;
+   the held-out set (20 questions, `eval --heldout`) carries the
+   generalization claim and is one-shot (missed questions replaced, not
+   re-tuned). README carries both.
 
 Plus the deferred queue: `docs/designs/TODOS.md` (CI eval gate) and the design
 doc's post-publish order (URL crawl, HTTP API, Docker, Postgres, 10x
