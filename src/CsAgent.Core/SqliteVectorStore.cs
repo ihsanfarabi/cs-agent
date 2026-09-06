@@ -46,6 +46,17 @@ public sealed class SqliteVectorStore : IDisposable
         return stored is null || stored != contentHash;
     }
 
+    /// <summary>Every ingested page key — the crawl-resume skip-set.</summary>
+    public IReadOnlySet<string> IngestedPaths()
+    {
+        var paths = new HashSet<string>(StringComparer.Ordinal);
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "SELECT path FROM pages";
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read()) paths.Add(reader.GetString(0));
+        return paths;
+    }
+
     public void UpsertPage(string pagePath, string contentHash, IReadOnlyList<(string Text, float[] Embedding)> chunks)
     {
         using var tx = _connection.BeginTransaction();

@@ -5,7 +5,7 @@ try
     var config = CsAgentConfig.FromCurrentEnvironment(new HashSet<string>(["fixtures"]));
     return args switch
     {
-        ["ingest", var path] => Ingest(path, config),
+        ["ingest", var path] => Ingest(path, config), // path or http(s) URL
         ["ask", ..] => Ask(args, config),
         ["eval", ..] => Eval(args, config),
         ["--version"] => PrintVersion(),
@@ -17,11 +17,14 @@ try
         if (args.Length != 2)
         {
             Console.Error.WriteLine(new CsAgentError(
-                "ingest", "bad-args", "usage: cs-agent ingest <path>"));
+                "ingest", "bad-args", "usage: cs-agent ingest <path-or-url>"));
             return 1;
         }
 
-        var summary = CsAgentRuntime.IngestPath(cfg, path);
+        var summary = path.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+                     || path.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+            ? CsAgentRuntime.IngestUrl(cfg, path)
+            : CsAgentRuntime.IngestPath(cfg, path);
         Console.WriteLine($"ingested {summary.PagesIngested} pages ({summary.PagesResumed} resumed, {summary.PagesLoaded} found) into {summary.StorePath}");
         Console.WriteLine($"chunks embedded: {summary.ChunksEmbedded} · {summary.Seconds:F1}s · model {cfg.EmbeddingModel}");
         foreach (var skip in summary.Skipped)
@@ -141,7 +144,7 @@ try
 
     int Usage()
     {
-        Console.Error.WriteLine("usage: cs-agent <ingest|ask|eval [--heldout] [--fresh]> ...");
+        Console.Error.WriteLine("usage: cs-agent <ingest <path-or-url> | ask [--json] \"<question>\" | eval [--heldout] [--fresh]>");
         return 1;
     }
 }
