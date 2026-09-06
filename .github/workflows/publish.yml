@@ -1,0 +1,59 @@
+name: publish
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write # gh release create
+      id-token: write # GitHub OIDC → nuget.org Trusted Publishing
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - run: dotnet restore
+
+      - run: dotnet build -c Release --no-restore
+
+      # Same gate as ci.yml: no package ships from a tree that misses targets.
+      - run: dotnet test -c Release --no-build
+
+      # Version guard: tag must equal csproj Version, else fail BEFORE packing.
+      - name: Version guard (tag vs CsAgent.Cli.csproj)
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          VERSION=$(grep -oPm1 '(?<=<Version>)[^<]+' src/CsAgent.Cli/CsAgent.Cli.csproj)
+          echo "tag: v$TAG  csproj Version: $VERSION"
+          if [ "$TAG" != "$VERSION" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match csproj Version $VERSION — bump the csproj or re-tag"
+            exit 1
+          fi
+
+      - run: dotnet pack src/CsAgent.Cli/CsAgent.Cli.csproj -c Release --no-build -o dist
+
+      # Trusted Publishing: OIDC token → one-hour single-use API key.
+      # No stored secret. Policy registered on nuget.org (owner/repo/publish.yml).
+      # `user` = nuget.org profile name (not email).
+      - name: NuGet login (OIDC)
+        uses: NuGet/login@v1
+        id: nuget
+        with:
+          user: ihsanfarabi
+
+      - name: Push to nuget.org
+        run: dotnet nuget push dist/*.nupkg --api-key ${{ steps.nuget.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json
+
+      - name: Create GitHub release with nupkg attached
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/*.nupkg \
+            --title "cs-agent $GITHUB_REF_NAME" \
+            --notes "Verifier-gated support resolution engine. Install: dotnet tool install -g cs-agent"

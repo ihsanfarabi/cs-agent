@@ -26,4 +26,9 @@
     <ProjectReference Include="..\..\src\CsAgent.Mcp\CsAgent.Mcp.csproj" />
   </ItemGroup>
 
+  <!-- Eval gate test runs the full repo fixture through the fake seam -->
+  <ItemGroup>
+    <None Include="..\..\fixtures\**\*" Link="fixtures\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
