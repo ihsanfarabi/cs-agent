@@ -36,10 +36,12 @@ public sealed partial class EvalGateTests : IDisposable
     /// negative control can prove the gate is not vacuous.
     /// </summary>
     private (EvalMetrics Metrics, IReadOnlyList<EvalQuestionResult> Results, int Skipped) RunScripted(
-        IReadOnlyCollection<string> escalateFlips)
+        IReadOnlyCollection<string> escalateFlips,
+        string fixtureFile = "questions.jsonl")
     {
-        var records = FixtureLoader.FromJsonl(Path.Combine(FixtureRoot, "questions.jsonl"));
-        Assert.Equal(25, records.Count); // fixture sanity — loader already fails loudly on corruption
+        var records = FixtureLoader.FromJsonl(Path.Combine(FixtureRoot, fixtureFile));
+        Assert.True(records.Count is 25 or 20,
+            $"unexpected fixture size: {fixtureFile} has {records.Count} records");
 
         var byQuestion = records.ToDictionary(r => r.Question, r => r);
         var flips = new HashSet<string>(escalateFlips);
@@ -125,6 +127,29 @@ public sealed partial class EvalGateTests : IDisposable
         Assert.Equal(0, metrics.HallucinationProxy);
         Assert.True(EvalScoring.Passes(metrics),
             $"gate must pass on the scripted fixture, got {metrics.AnswerableResolved}/{metrics.AnswerableTotal} answerable, " +
+            $"{metrics.UnanswerableEscalated}/{metrics.UnanswerableTotal} unanswerable, proxy {metrics.HallucinationProxy}");
+    }
+
+    /// <summary>
+    /// Held-out fixture (20 records: 16 answerable, 4 unanswerable) through the
+    /// same scripted seam. Proves the file parses, the labels satisfy the loader's
+    /// invariants, and the pass targets scale (≥80% of 16, 4/4, proxy 0). The
+    /// one-shot rule lives in the README; this gate never scores prompt quality.
+    /// </summary>
+    [Fact]
+    public void ScriptedHeldOut_MeetsAllPassTargets()
+    {
+        var (metrics, results, skipped) = RunScripted(escalateFlips: [], fixtureFile: "questions-heldout.jsonl");
+
+        Assert.Equal(20, results.Count);
+        Assert.Equal(0, skipped);
+        Assert.Equal(16, metrics.AnswerableTotal);
+        Assert.Equal(16, metrics.AnswerableResolved);
+        Assert.Equal(4, metrics.UnanswerableTotal);
+        Assert.Equal(4, metrics.UnanswerableEscalated);
+        Assert.Equal(0, metrics.HallucinationProxy);
+        Assert.True(EvalScoring.Passes(metrics),
+            $"held-out gate must pass on the scripted fixture, got {metrics.AnswerableResolved}/{metrics.AnswerableTotal} answerable, " +
             $"{metrics.UnanswerableEscalated}/{metrics.UnanswerableTotal} unanswerable, proxy {metrics.HallucinationProxy}");
     }
 

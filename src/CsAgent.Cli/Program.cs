@@ -59,11 +59,12 @@ try
     int Eval(string[] evalArgs, CsAgentConfig cfg)
     {
         var fresh = evalArgs.Contains("--fresh");
-        var fixturePath = File.Exists("fixtures/questions.jsonl")
-            ? "fixtures/questions.jsonl"
-            : throw new CsAgentException(new CsAgentError(
+        var heldOut = evalArgs.Contains("--heldout");
+        var fixturePath = heldOut ? "fixtures/questions-heldout.jsonl" : "fixtures/questions.jsonl";
+        if (!File.Exists(fixturePath))
+            throw new CsAgentException(new CsAgentError(
                 "eval", "fixture-not-found",
-                "fixtures/questions.jsonl not found — run eval from the repo root"));
+                $"{fixturePath} not found — run eval from the repo root"));
         var records = FixtureLoader.FromJsonl(fixturePath);
 
         // ingest the fixture corpus first (idempotent), then score against the SAME store
@@ -71,7 +72,7 @@ try
         var ingestSummary = CsAgentRuntime.IngestPath(cfg, "fixtures/docs", corpusStorePath);
         Console.WriteLine($"ingested fixtures: {ingestSummary.PagesIngested} pages ({ingestSummary.PagesResumed} resumed) into {ingestSummary.StorePath}");
 
-        var resultsDir = "./eval-results";
+        var resultsDir = heldOut ? "./eval-results/heldout" : "./eval-results";
         var isTty = Console.IsErrorRedirected == false;
         var pipeline = CsAgentRuntime.CreateAskPipeline(cfg,
             progress: isTty ? stage => Console.Error.WriteLine($"… {stage}") : null);
@@ -90,9 +91,10 @@ try
             Console.WriteLine($"  MISS  [{(r.ExpectedOutcome == "resolved" ? "should resolve" : "should escalate")}] {r.Question}");
 
         var passed = EvalScoring.Passes(metrics);
+        var set = heldOut ? "held-out" : "tuning";
         Console.WriteLine(passed
-            ? "PASS  targets met (≥80% answerable, 5/5 unanswerable, proxy 0)"
-            : "FAIL  targets not met — exit 1 (honest-fail gate)");
+            ? $"PASS  {set} set: targets met (≥80% answerable, {metrics.UnanswerableEscalated}/{metrics.UnanswerableTotal} unanswerable, proxy 0)"
+            : $"FAIL  {set} set: targets not met — exit 1 (honest-fail gate)");
         return passed ? 0 : 1;
     }
 
@@ -139,7 +141,7 @@ try
 
     int Usage()
     {
-        Console.Error.WriteLine("usage: cs-agent <ingest|ask|eval> ...");
+        Console.Error.WriteLine("usage: cs-agent <ingest|ask|eval [--heldout] [--fresh]> ...");
         return 1;
     }
 }

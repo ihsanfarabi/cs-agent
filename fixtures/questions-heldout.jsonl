@@ -1,0 +1,20 @@
+{"question": "Can an API key created by a read-only member deploy?", "expected_answer": "No; keys inherit the role of the member who created them.", "expected_sources": ["api-keys.md"], "expected_outcome": "resolved"}
+{"question": "Where do I create a personal access token?", "expected_answer": "Settings → Access tokens; the token carries the same scopes the user has.", "expected_sources": ["authentication.md"], "expected_outcome": "resolved"}
+{"question": "How do third-party applications get access to my account?", "expected_answer": "Through OAuth; apps request scopes explicitly and you approve each scope during authorization.", "expected_sources": ["authentication.md"], "expected_outcome": "resolved"}
+{"question": "When am I billed for usage beyond my plan limits?", "expected_answer": "Overages are invoiced at the end of the billing cycle, appearing as a separate line on the next invoice.", "expected_sources": ["billing.md"], "expected_outcome": "resolved"}
+{"question": "How do I install the CLI?", "expected_answer": "npm install -g @nimbus/cli, or brew install nimbus.", "expected_sources": ["cli.md"], "expected_outcome": "resolved"}
+{"question": "Is a GDPR data processing agreement available?", "expected_answer": "Yes, for all customers on request.", "expected_sources": ["compliance.md"], "expected_outcome": "resolved"}
+{"question": "How long are backups kept?", "expected_answer": "Backups run nightly and are kept for 14 days, for disaster recovery only.", "expected_sources": ["data-retention.md"], "expected_outcome": "resolved"}
+{"question": "Who can take point-in-time snapshots?", "expected_answer": "Enterprise workspaces, through the API.", "expected_sources": ["export.md"], "expected_outcome": "resolved"}
+{"question": "How quickly are incident postmortems published?", "expected_answer": "Within 5 business days of incident resolution.", "expected_sources": ["incidents-status.md"], "expected_outcome": "resolved"}
+{"question": "What does the Slack integration do?", "expected_answer": "Posts deploy and incident alerts to a channel you choose; configured from Settings → Integrations.", "expected_sources": ["integrations.md"], "expected_outcome": "resolved"}
+{"question": "How do I import an existing project?", "expected_answer": "Run nimbus import; it connects to the source repository and copies the configuration.", "expected_sources": ["migrations.md"], "expected_outcome": "resolved"}
+{"question": "What happens if a schema migration fails during a deploy?", "expected_answer": "Migrations run in order and stop the deploy when one fails.", "expected_sources": ["migrations.md"], "expected_outcome": "resolved"}
+{"question": "How are notifications delivered?", "expected_answer": "By email and by webhook events; channels are chosen per notification type.", "expected_sources": ["notifications.md"], "expected_outcome": "resolved"}
+{"question": "What commands do I run for my first deploy?", "expected_answer": "nimbus init, then nimbus deploy; the first deploy runs a free build.", "expected_sources": ["quickstart.md"], "expected_outcome": "resolved"}
+{"question": "What does a 429 response tell me?", "expected_answer": "You exceeded your rate limit; the Retry-After header gives the seconds to wait, then back off and retry.", "expected_sources": ["rate-limits.md"], "expected_outcome": "resolved"}
+{"question": "What does nimbus sandbox reset do?", "expected_answer": "Deletes all sandbox data and restores the default template.", "expected_sources": ["sandbox.md"], "expected_outcome": "resolved"}
+{"question": "How do I enable dark mode in the dashboard?", "expected_answer": "", "expected_sources": [], "expected_outcome": "escalate"}
+{"question": "What is the maximum payload size for a webhook event?", "expected_answer": "", "expected_sources": [], "expected_outcome": "escalate"}
+{"question": "Can I self-host Nimbus?", "expected_answer": "", "expected_sources": [], "expected_outcome": "escalate"}
+{"question": "How do I change the email address on my account?", "expected_answer": "", "expected_sources": [], "expected_outcome": "escalate"}
