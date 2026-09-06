@@ -1,5 +1,30 @@
 # TODOS — cs-agent
 
+## DONE: URL crawl ingest mode (closed 2026-09-06; was design-doc post-publish item, issue #4)
+
+**What shipped (PR #5, merged 7a0c18b):** `cs-agent ingest <url>` — same-domain
+HTML crawl into a host-derived corpus (`docs.foo.com` →
+`cs-agent-docs-foo-com.db`). AngleSharp DOM-parse (no JS execution) +
+ReverseMarkdown conversion; ≤200 pages, depth ≤3, ≥1 req/s (+ robots
+Crawl-delay when larger); robots.txt prefix-Disallow only, absent = allow,
+5xx = fail closed with zero fetches; `<meta robots noindex>` skip; fragment+
+query stripped; off-host links dropped. Prompts hardened for crawled corpora
+(chunk delimiters + explicit data-not-instructions line; residual boundary
+documented in README). Resume is pipeline-level (D8): crawl re-walks links,
+content-hash skips re-embedding of unchanged pages — the spec's original
+pre-fetch skip broke its own resume AC and was replaced after live smoke.
+
+**Live eval (post-hardening prompts, run 34041476296, gate green):** tuning
+17/20 · 5/5 · proxy 0 · Jaccard 0.93; held-out 15/16 · 4/4 · proxy 0 ·
+Jaccard 0.91. Both above gate; README tables updated to the honest ranges.
+Workflow lesson: tuning + held-out now run as PARALLEL jobs — a single serial
+45-min job starved the held-out set on slow provider days (two cancelled runs).
+
+**Known limits (documented in README):** JS-rendered sites, sitemaps,
+auth-gated pages, and URL-based eval fixtures are out of scope v1 (verified
+live against anglesharp.github.io, a JS SPA — crawler ingests 1 page, no
+crash).
+
 ## DONE: Held-out eval set (closed 2026-09-06; was README/design-doc "first upgrade")
 
 **What shipped:** `fixtures/questions-heldout.jsonl` — 20 fresh questions
