@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/CsAgent.Cli/CsAgent.Cli.csproj" />
+    <Project Path="src/CsAgent.Core/CsAgent.Core.csproj" />
+    <Project Path="src/CsAgent.Mcp/CsAgent.Mcp.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/CsAgent.Tests/CsAgent.Tests.csproj" />
+  </Folder>
+</Solution>

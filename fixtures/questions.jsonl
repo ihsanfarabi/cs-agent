@@ -1,0 +1,25 @@
+{"question": "How do I rotate the API key?", "expected_answer": "Rotate from Settings > API keys > Rotate; the new key works immediately and the old key keeps working for 24 hours.", "expected_sources": ["api-keys.md"], "expected_outcome": "resolved"}
+{"question": "What happens to my old API key after rotation?", "expected_answer": "It stays valid for 24 hours after rotation, then expires automatically.", "expected_sources": ["api-keys.md"], "expected_outcome": "resolved"}
+{"question": "How many active API keys can I have at once?", "expected_answer": "Two active keys per workspace; a third requires rotating an existing one.", "expected_sources": ["api-keys.md"], "expected_outcome": "resolved"}
+{"question": "When are invoices issued?", "expected_answer": "On the first day of each calendar month, covering the previous month.", "expected_sources": ["billing.md"], "expected_outcome": "resolved"}
+{"question": "How long do I have to request a refund?", "expected_answer": "14 days from the invoice date.", "expected_sources": ["billing.md"], "expected_outcome": "resolved"}
+{"question": "Which plans does Nimbus offer and what do they cost?", "expected_answer": "Starter (free), Pro ($29 per user per month), and Enterprise (custom pricing).", "expected_sources": ["plans.md"], "expected_outcome": "resolved"}
+{"question": "How many projects can I have on the Starter plan?", "expected_answer": "3 projects.", "expected_sources": ["usage-limits.md"], "expected_outcome": "resolved"}
+{"question": "What are the API rate limits on the Pro plan?", "expected_answer": "600 requests per minute, applied per workspace.", "expected_sources": ["rate-limits.md"], "expected_outcome": "resolved"}
+{"question": "What happens when a webhook delivery fails?", "expected_answer": "Nimbus retries 5 times over 24 hours with exponential backoff; after the fifth failure the endpoint is disabled and must be re-enabled manually.", "expected_sources": ["webhooks.md"], "expected_outcome": "resolved"}
+{"question": "How are webhook deliveries authenticated?", "expected_answer": "Each delivery is signed with HMAC SHA-256; verify the X-Nimbus-Signature header against the endpoint secret.", "expected_sources": ["webhooks.md"], "expected_outcome": "resolved"}
+{"question": "Which official SDK languages does Nimbus ship?", "expected_answer": "JavaScript, Python, Go, and Ruby.", "expected_sources": ["sdks.md"], "expected_outcome": "resolved"}
+{"question": "How do I authenticate the CLI in a CI pipeline?", "expected_answer": "Expose a personal access token as the NIMBUS_TOKEN environment variable; the CLI picks it up and skips the browser flow.", "expected_sources": ["cli.md"], "expected_outcome": "resolved"}
+{"question": "What roles can team members have?", "expected_answer": "Owner, Admin, Member, and Viewer.", "expected_sources": ["teams-roles.md"], "expected_outcome": "resolved"}
+{"question": "How long are audit logs retained by default?", "expected_answer": "90 days on all plans; Enterprise can extend to one year.", "expected_sources": ["audit-logs.md"], "expected_outcome": "resolved"}
+{"question": "Can deleted projects be recovered?", "expected_answer": "Yes, within 30 days of deletion; after that they are permanently removed.", "expected_sources": ["data-retention.md"], "expected_outcome": "resolved"}
+{"question": "In which formats can I export my project data?", "expected_answer": "JSON or CSV.", "expected_sources": ["export.md"], "expected_outcome": "resolved"}
+{"question": "How are incidents communicated?", "expected_answer": "Subscribers are notified by email and webhook when an incident is declared; status and history live on the status page.", "expected_sources": ["incidents-status.md"], "expected_outcome": "resolved"}
+{"question": "Which compliance certifications does Nimbus hold?", "expected_answer": "SOC 2 Type II and ISO 27001.", "expected_sources": ["compliance.md"], "expected_outcome": "resolved"}
+{"question": "Does every account get a sandbox?", "expected_answer": "Yes, one sandbox project at signup, isolated from production data.", "expected_sources": ["sandbox.md"], "expected_outcome": "resolved"}
+{"question": "Which source-control integrations are supported?", "expected_answer": "GitHub and GitLab, deploying on push.", "expected_sources": ["integrations.md"], "expected_outcome": "resolved"}
+{"question": "What is your SLA uptime percentage?", "expected_answer": "", "expected_sources": [], "expected_outcome": "escalate"}
+{"question": "What is your phone support number?", "expected_answer": "", "expected_sources": [], "expected_outcome": "escalate"}
+{"question": "Do you provide an official Terraform provider?", "expected_answer": "", "expected_sources": [], "expected_outcome": "escalate"}
+{"question": "What is the maximum file upload size?", "expected_answer": "", "expected_sources": [], "expected_outcome": "escalate"}
+{"question": "Can I pay with cryptocurrency?", "expected_answer": "", "expected_sources": [], "expected_outcome": "escalate"}
