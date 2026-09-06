@@ -43,6 +43,40 @@ public static class CsAgentRuntime
         return summary;
     }
 
+    public static IngestSummary IngestUrl(CsAgentConfig cfg, string url, string? storePath = null)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var seed) || seed.Scheme is not ("http" or "https"))
+            throw new CsAgentException(new CsAgentError("crawl", "bad-url",
+                $"Ingest URL must be absolute http(s): '{url}'."));
+        var corpusName = HtmlCrawler.CorpusNameFromHost(seed.Host);
+        var resolvedStore = storePath
+            ?? (string.IsNullOrWhiteSpace(cfg.StorePath)
+                ? $"./cs-agent-{corpusName}.db"
+                : cfg.StorePath);
+
+        var client = BuildClient(cfg);
+        IEmbeddingGenerator<string, Embedding<float>> embeddings =
+            client.GetEmbeddingClient(cfg.EmbeddingModel).AsIEmbeddingGenerator();
+        using var store = new SqliteVectorStore(resolvedStore, cfg.EmbeddingModel);
+
+        // pipeline-level resume (D8): the crawl re-walks links (fetch), then
+        // IngestPipeline's content-hash check skips re-embedding unchanged
+        // pages — a killed ingest resumes at the unvisited pages
+        var crawl = new HtmlCrawler().Crawl(seed);
+        if (crawl.Pages.Count == 0)
+            throw new CsAgentException(new CsAgentError("crawl", "no-crawlable-pages",
+                $"Crawled 0 pages from '{url}'. " +
+                (crawl.Skipped.Count > 0
+                    ? $"Skipped: {string.Join("; ", crawl.Skipped.Take(3))}"
+                    : "No same-host HTML pages found.")));
+
+        var pipeline = new IngestPipeline(embeddings, store, cfg.ChunkSize, cfg.ChunkOverlap);
+        var summary = pipeline.Run(new LoadReport(crawl.Pages, crawl.Skipped), corpusName)
+            with { StorePath = resolvedStore };
+        CorpusPointer.Update(resolvedStore);
+        return summary;
+    }
+
     private static OpenAIClient BuildClient(CsAgentConfig cfg) =>
         new(new System.ClientModel.ApiKeyCredential(cfg.ModelKey),
             new OpenAIClientOptions { Endpoint = new Uri(cfg.BaseUrl) });

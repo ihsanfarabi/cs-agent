@@ -56,8 +56,8 @@ public sealed class CorpusLoaderTests : IDisposable
 
         var report = CorpusLoader.Load(_root);
         Assert.Equal(2, report.Pages.Count);
-        Assert.Contains(report.Pages, p => p.RelativePath == "docs/api-keys.md");
-        Assert.Contains(report.Pages, p => p.RelativePath == "docs/index.html");
+        Assert.Contains(report.Pages, p => p.Key == "docs/api-keys.md");
+        Assert.Contains(report.Pages, p => p.Key == "docs/index.html");
         Assert.Contains(report.Skipped, s => s.Contains("bad.md"));
     }
 
@@ -137,6 +137,26 @@ public sealed class IngestPipelineTests : IDisposable
         Assert.Equal(2, resumed.PagesResumed);
         Assert.Equal(0, resumed.PagesIngested);
         Assert.Equal(0, resumed.ChunksEmbedded);
+    }
+
+    [Fact]
+    public void UrlKeyedPage_TitleFallsBackToSegmentOrHost()
+    {
+        var pages = new[]
+        {
+            new LoadedPage("https://docs.foo.com/guides/api", "no heading here"),
+            new LoadedPage("https://docs.foo.com/", "no heading either"),
+        };
+        var summary = MakePipeline().Run(new LoadReport(pages, []), "docs-foo-com");
+        Assert.Equal(2, summary.PagesIngested);
+
+        using var store = new SqliteVectorStore(_dbPath, "fake-embedding");
+        // hash vectors rank arbitrarily — take both and pick by content
+        var hits = store.TopK(FakeEmbeddingGenerator.HashToVector("no heading either"), 2);
+        Assert.StartsWith("api — ",
+            hits.Single(h => h.Text.Contains("no heading here")).Text);   // last URL segment
+        Assert.StartsWith("docs.foo.com — ",
+            hits.Single(h => h.Text.Contains("no heading either")).Text); // host for root URLs
     }
 
     [Fact]

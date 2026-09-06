@@ -59,8 +59,10 @@ dotnet tool install -g cs-agent --add-source <packed nupkg dir>   # or: dotnet r
 export CS_AGENT_MODEL_KEY=sk-or-...
 export CS_AGENT_BASE_URL=https://your-endpoint/v1   # optional — only if NOT OpenRouter
 
-# 2. ingest your docs (local .md/.html; fixtures/ is the built-in eval corpus)
+# 2. ingest your docs (local .md/.html path, or crawl a docs site by URL;
+#    fixtures/ is the built-in eval corpus)
 cs-agent ingest ./your-docs
+cs-agent ingest https://docs.example.com
 
 # 3. ask — every answer is verified claim-by-claim before it prints
 cs-agent ask "How do I rotate my API key?"
@@ -77,6 +79,29 @@ in both draft and verify roles. Override with `CS_AGENT_DRAFT_MODEL` /
 
 Configuration is env vars only — `CS_AGENT_MODEL_KEY` is the only required one.
 The full list lives in `src/CsAgent.Core/CsAgentConfig.cs`.
+
+### URL ingest mode
+
+`cs-agent ingest https://docs.example.com` crawls the site's HTML and ingests
+markdown-converted content into a host-derived corpus (`docs.example.com` →
+`cs-agent-docs-example-com.db`). Same-domain only, ≤ 200 pages, depth ≤ 3,
+≥ 1 request/second, HTML only (JavaScript-rendered sites are out of scope in
+v1). robots.txt is fetched and obeyed — `User-agent: *` plus an explicit
+`cs-agent` group, prefix `Disallow` matching (no wildcards or `Allow` in v1);
+an absent robots.txt allows, a 5xx robots.txt fails closed with no fetches.
+`<meta name="robots" content="noindex">` pages are skipped.
+
+Re-running the same URL resumes at the pipeline level: the crawl re-walks the
+site's links (HTTP fetch, same 1 req/s pace), and pages whose content hash is
+unchanged are skipped without re-embedding — a killed ingest continues at the
+unvisited pages. Changed page content is picked up automatically by the same
+hash check; deleting the corpus `.db` is only needed to re-embed from scratch.
+
+**Trust boundary:** chunk text is untrusted input, doubly so for crawled
+corpora. Prompts delimit chunk data and instruct the models to treat it as
+data, never instructions — hardening makes corpus poisoning harder, not
+impossible. A fully malicious corpus can still steer retrieval and force
+escalations.
 
 ## The result object
 
@@ -104,7 +129,7 @@ unanswerable escalated, proxy 0 — `eval` exits 1 on a miss (honest-fail).
 |---|---|---|---|---|
 | gpt-4o + gpt-4o-mini | 20/20 | 5/5 | 0 | 0.95 |
 | deepseek-v4-flash-0731 + gpt-4o-mini | 18–20/20 | 5/5 | 0 | 0.91–0.93 |
-| deepseek-v4-flash-0731 (both roles) *(default)* | 20/20 | 5/5 | 0 | 0.92–0.95 |
+| deepseek-v4-flash-0731 (both roles) *(default)* | 17–20/20 | 5/5 | 0 | 0.89–0.93 |
 | z-ai/glm-5.3-flash (both roles) | 20/20 | 5/5 | 0 | 0.93 |
 | qwen/qwen3.8-flash (both roles) | 20/20 | 5/5 | 0 | 0.95 |
 | inclusionai/ling-3.0-flash-fin (both roles) | 19/20 | 5/5 | 0 | 0.88 |
@@ -117,14 +142,16 @@ locked, and never influenced them. Run with `cs-agent eval --heldout`.
 
 | Draft + verify pair | Answerable | Unanswerable | Proxy | Citation Jaccard |
 |---|---|---|---|---|
-| deepseek-v4-flash-0731 (both roles) *(default)* | 16/16 | 4/4 | 0 | 0.97 |
+| deepseek-v4-flash-0731 (both roles) *(default)* | 15–16/16 | 4/4 | 0 | 0.91–0.97 |
 
-One live run, 2026-09-06 (the `live-eval` workflow, which gates both sets). A
-local run of the same pair scored 15/16 with one sampling-variance miss — the
-same non-determinism the caveat below records. **One-shot rule:** if a future
-change misses a held-out question, fix the prompt or model and REPLACE that
-question with a fresh one — a question tuned against its own miss is in-sample
-from that moment. The gate for both sets is the same honest-fail exit code.
+Two live runs, 2026-09-06 (the `live-eval` workflow, which gates both sets):
+16/16 with the original prompts, 15/16 with the prompt hardening shipped in
+the URL-crawl release. A local run of the same pair also scored 15/16 with one
+sampling-variance miss — the same non-determinism the caveat below records.
+**One-shot rule:** if a future change misses a held-out question, fix the
+prompt or model and REPLACE that question with a fresh one — a question tuned
+against its own miss is in-sample from that moment. The gate for both sets is
+the same honest-fail exit code.
 
 Caveats, stated plainly:
 
@@ -138,7 +165,8 @@ Caveats, stated plainly:
   fresh run scored 18/20 — both misses escalated correctly-cited borderline
   answers and resolved on immediate re-ask (sampling variance, not a model
   defect); that variance is why the default moved to all-deepseek, which has
-  held 20/20 across both its runs.
+  scored 17–20/20 across three live runs — every miss escalated instead of
+  hallucinating, and every run stayed above the 80% gate.
 - **Hallucination proxy undercounts.** It counts zero-overlap resolutions only;
   a wrong answer that happens to cite the right page passes it by design. It is
   reproducible and independent of the live verifier, which is why it exists.
@@ -185,8 +213,7 @@ installable product with an eval harness.
    held-out set above, which stays one-shot (missed questions get replaced,
    not re-tuned).
 
-Deferred work: a CI eval gate (GitHub Actions running `eval` per PR), URL
-crawling for ingest, an HTTP API, Docker packaging, Postgres storage, and
+Deferred work: an HTTP API, Docker packaging, Postgres storage, and
 escalation-with-actions (the escalation path gaining MAF tool-calling so a
 "cannot answer" can open a ticket or notify a human).
 

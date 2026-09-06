@@ -91,8 +91,7 @@ public sealed class AskPipeline(
         var sb = new System.Text.StringBuilder();
         sb.AppendLine($"QUESTION: {question}");
         sb.AppendLine("CHUNKS:");
-        foreach (var chunk in chunks)
-            sb.AppendLine($"[{chunk.Number}] ({chunk.PagePath}) {chunk.Text}");
+        AppendChunks(sb, chunks);
         sb.AppendLine("Answer the question using only these chunks, citing [n] after each claim.");
         return sb.ToString();
     }
@@ -105,9 +104,23 @@ public sealed class AskPipeline(
         sb.AppendLine($"QUESTION: {question}");
         sb.AppendLine($"DRAFT ANSWER: {answer}");
         sb.AppendLine("CHUNKS:");
-        foreach (var chunk in chunks)
-            sb.AppendLine($"[{chunk.Number}] ({chunk.PagePath}) {chunk.Text}");
+        AppendChunks(sb, chunks);
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Delimiter isolates corpus data from prompt instructions; a chunk that
+    /// literally contains "END CHUNK>>>" could still break delimiting —
+    /// residual risk documented in the README trust-boundary statement.
+    /// </summary>
+    private static void AppendChunks(System.Text.StringBuilder sb, IReadOnlyList<CitedChunk> chunks)
+    {
+        foreach (var chunk in chunks)
+        {
+            sb.AppendLine($"<<<CHUNK {chunk.Number} ({chunk.PagePath})");
+            sb.AppendLine(chunk.Text);
+            sb.AppendLine("END CHUNK>>>");
+        }
     }
 
     /// <summary>

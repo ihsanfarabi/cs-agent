@@ -110,7 +110,7 @@ public sealed partial class EvalGateTests : IDisposable
     [GeneratedRegex(@"^QUESTION: (.+)$", RegexOptions.Multiline)]
     private static partial Regex QuestionLineRegex();
 
-    [GeneratedRegex(@"^\[(\d+)\] \(([^)]+)\)", RegexOptions.Multiline)]
+    [GeneratedRegex(@"^<<<CHUNK (\d+) \(([^)]+)\)", RegexOptions.Multiline)]
     private static partial Regex ChunkLineRegex();
 
     [Fact]
