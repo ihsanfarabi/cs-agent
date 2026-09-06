@@ -50,10 +50,11 @@ public sealed record CsAgentConfig(
         return new CsAgentConfig(
             ModelKey: key,
             BaseUrl: baseUrl,
-            // defaults = the pair that passed the eval gate: DeepSeek draft + gpt-4o-mini gate.
+            // defaults = the pair that passed the eval gate with 20/20 across runs:
+            // DeepSeek drafts and verifies (single-vendor, single-key).
             // DeepSeek is OpenRouter-only — the default BASE_URL must be openrouter for it to resolve.
             DraftModel: NonEmpty(env, "CS_AGENT_DRAFT_MODEL", "deepseek/deepseek-v4-flash-0731"),
-            VerifyModel: NonEmpty(env, "CS_AGENT_VERIFY_MODEL", "gpt-4o-mini"),
+            VerifyModel: NonEmpty(env, "CS_AGENT_VERIFY_MODEL", "deepseek/deepseek-v4-flash-0731"),
             EmbeddingModel: NonEmpty(env, "CS_AGENT_EMBEDDING_MODEL", "text-embedding-3-small"),
             EmbeddingDeployment: env.TryGetValue("CS_AGENT_EMBEDDING_DEPLOYMENT", out var dep) && !string.IsNullOrWhiteSpace(dep) ? dep : null,
             TopK: topK,

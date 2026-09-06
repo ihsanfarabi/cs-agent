@@ -113,8 +113,8 @@ public sealed class AskPipeline(
     /// <summary>
     /// Static price table cannot price BYO models, and no per-call token usage
     /// is captured, so v1 always prints the non-default marker (documented
-    /// limitation #1). Defaults are deepseek/deepseek-v4-flash-0731 +
-    /// gpt-4o-mini; a real cost line needs usage capture first.
+    /// limitation #1). Defaults are deepseek/deepseek-v4-flash-0731 in both
+    /// roles; a real cost line needs usage capture first.
     /// </summary>
     private static string CostLine() => "— (non-default model)";
 }

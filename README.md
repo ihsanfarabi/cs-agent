@@ -71,7 +71,7 @@ cs-agent eval
 ```
 
 Default models (eval-gated pair, see below): `deepseek/deepseek-v4-flash-0731`
-drafts, `gpt-4o-mini` verifies. Override with `CS_AGENT_DRAFT_MODEL` /
+in both draft and verify roles. Override with `CS_AGENT_DRAFT_MODEL` /
 `CS_AGENT_VERIFY_MODEL` for any OpenAI-compatible provider. Embeddings default to
 `text-embedding-3-small` (OpenRouter serves them too).
 
@@ -103,8 +103,8 @@ unanswerable escalated, proxy 0 — `eval` exits 1 on a miss (honest-fail).
 | Draft + verify pair | Answerable | Unanswerable | Proxy | Citation Jaccard |
 |---|---|---|---|---|
 | gpt-4o + gpt-4o-mini | 20/20 | 5/5 | 0 | 0.95 |
-| deepseek-v4-flash-0731 + gpt-4o-mini *(default)* | 20/20 | 5/5 | 0 | 0.93 |
-| deepseek-v4-flash-0731 (both roles) | 20/20 | 5/5 | 0 | 0.95 |
+| deepseek-v4-flash-0731 + gpt-4o-mini | 18–20/20 | 5/5 | 0 | 0.91–0.93 |
+| deepseek-v4-flash-0731 (both roles) *(default)* | 20/20 | 5/5 | 0 | 0.92–0.95 |
 | z-ai/glm-5.3-flash (both roles) | 20/20 | 5/5 | 0 | 0.93 |
 | qwen/qwen3.8-flash (both roles) | 20/20 | 5/5 | 0 | 0.95 |
 | inclusionai/ling-3.0-flash-fin (both roles) | 19/20 | 5/5 | 0 | 0.88 |
@@ -116,7 +116,11 @@ Caveats, stated plainly:
 - **Single-run pairs.** The gpt-4o pair held across six fresh eval runs; the
   cheaper pairs have one or two runs each. OpenRouter does not guarantee
   temperature-0 determinism, and one qwen run showed a single-question flake
-  that a resume run did not reproduce.
+  that a resume run did not reproduce. The deepseek + gpt-4o-mini pair's third
+  fresh run scored 18/20 — both misses escalated correctly-cited borderline
+  answers and resolved on immediate re-ask (sampling variance, not a model
+  defect); that variance is why the default moved to all-deepseek, which has
+  held 20/20 across both its runs.
 - **Hallucination proxy undercounts.** It counts zero-overlap resolutions only;
   a wrong answer that happens to cite the right page passes it by design. It is
   reproducible and independent of the live verifier, which is why it exists.

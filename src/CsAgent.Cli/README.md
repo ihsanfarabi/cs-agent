@@ -9,10 +9,10 @@ export CS_AGENT_MODEL_KEY=sk-or-...
 export CS_AGENT_BASE_URL=https://openrouter.ai/api/v1
 export CS_AGENT_EMBEDDING_MODEL=text-embedding-3-small     # default
 
-# draft/verify defaults (eval-gated pair): DeepSeek writes, gpt-4o-mini gates.
+# draft/verify defaults (eval-gated pair): DeepSeek in both roles.
 # Override either for any OpenAI-compatible provider:
 # export CS_AGENT_DRAFT_MODEL=deepseek/deepseek-v4-flash-0731
-# export CS_AGENT_VERIFY_MODEL=gpt-4o-mini
+# export CS_AGENT_VERIFY_MODEL=deepseek/deepseek-v4-flash-0731
 
 # 2. ingest your docs (local .md/.html; `fixtures` is the built-in eval corpus)
 cs-agent ingest ./your-docs
