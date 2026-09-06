@@ -1,14 +1,14 @@
 name: live-eval
 
 # Manual only — never on push/PR, never blocks anything. Real model calls
-# (~75 per run, all-deepseek defaults) against the same 25-question fixture.
+# (~125 per run, all-deepseek defaults): tuning set (25) then held-out set (20).
 on:
   workflow_dispatch:
 
 jobs:
   live-eval:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     env:
       CS_AGENT_MODEL_KEY: ${{ secrets.CS_AGENT_MODEL_KEY }}
     steps:
@@ -20,11 +20,28 @@ jobs:
 
       - run: dotnet build -c Release
 
-      # eval exit code is the gate: 0 pass / 1 miss (honest-fail).
-      - name: Run live eval
+      # eval exit code is the gate: 0 pass / 1 miss (honest-fail). Each set
+      # runs even if the other missed, so both truths reach the summary.
+      - name: Run live eval (tuning set)
+        id: tuning
+        continue-on-error: true
         run: |
           set -o pipefail
           dotnet run --project src/CsAgent.Cli -c Release --no-build -- eval --fresh | tee eval.out
+
+      - name: Run live eval (held-out set)
+        id: heldout
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          dotnet run --project src/CsAgent.Cli -c Release --no-build -- eval --heldout --fresh | tee eval-heldout.out
+
+      - name: Gate — both sets must pass
+        if: always()
+        run: |
+          echo "tuning:  ${{ steps.tuning.outcome }}"
+          echo "heldout: ${{ steps.heldout.outcome }}"
+          test "${{ steps.tuning.outcome }}" = success -a "${{ steps.heldout.outcome }}" = success
 
       - name: Write metrics to job summary
         if: always()
@@ -34,5 +51,11 @@ jobs:
             echo
             echo '```'
             cat eval.out
+            echo '```'
+            echo
+            echo "## Held-out eval — $GITHUB_REF_NAME"
+            echo
+            echo '```'
+            cat eval-heldout.out
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
