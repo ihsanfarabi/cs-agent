@@ -15,9 +15,9 @@ public sealed record IngestSummary(
     double Seconds);
 
 /// <summary>
-/// Path-mode ingest: load → chunk → embed (batched) → store, page by page.
-/// Idempotent: a page whose content hash is unchanged is skipped without
-/// re-embedding, so a killed ingest resumes where it stopped.
+/// Path or URL mode ingest: load → chunk → embed (batched) → store, page
+/// by page. Idempotent: a page whose content hash is unchanged is skipped
+/// without re-embedding, so a killed ingest resumes where it stopped.
 /// </summary>
 public sealed class IngestPipeline(
     IEmbeddingGenerator<string, Embedding<float>> embeddings,
@@ -26,10 +26,15 @@ public sealed class IngestPipeline(
     int chunkOverlap,
     int embedBatchSize = 64)
 {
-    public IngestSummary Run(string rootPath, string corpusName)
+    public IngestSummary Run(string rootPath, string corpusName) =>
+        Run(CorpusLoader.Load(rootPath), corpusName);
+
+    /// <summary>URL-mode entry: crawl results (or any page stream) through the
+    /// same chunk→embed→store loop. Key = absolute URL; hash covers the recipe,
+    /// so an unchanged URL-page resumes without re-embedding.</summary>
+    public IngestSummary Run(LoadReport report, string corpusName)
     {
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-        var report = CorpusLoader.Load(rootPath);
 
         var pagesIngested = 0;
         var pagesResumed = 0;
@@ -41,7 +46,7 @@ public sealed class IngestPipeline(
             // hash covers the chunking recipe, not just the text: a config or
             // prefix change must trigger re-embedding, never stale chunks.
             var hash = Sha256Hex($"{ChunkingVersion}|{chunkSize}|{chunkOverlap}|{page.Text}");
-            if (!store.NeedsIngest(page.RelativePath, hash))
+            if (!store.NeedsIngest(page.Key, hash))
             {
                 pagesResumed++;
                 continue;
@@ -58,7 +63,7 @@ public sealed class IngestPipeline(
                 if (vectors.Count != batch.Count)
                     throw new CsAgentException(new CsAgentError(
                         "ingest", "embedding-count-mismatch",
-                        $"Embedding provider returned {vectors.Count} vectors for {batch.Count} chunks on '{page.RelativePath}'."));
+                        $"Embedding provider returned {vectors.Count} vectors for {batch.Count} chunks on '{page.Key}'."));
                 for (var i = 0; i < batch.Count; i++)
                     withEmbeddings.Add((batch[i], vectors[i].Vector.ToArray()));
                 if (dimensionRecorded)
@@ -68,7 +73,7 @@ public sealed class IngestPipeline(
                 }
             }
 
-            store.UpsertPage(page.RelativePath, hash, withEmbeddings);
+            store.UpsertPage(page.Key, hash, withEmbeddings);
             pagesIngested++;
             chunksEmbedded += withEmbeddings.Count;
         }
@@ -81,11 +86,19 @@ public sealed class IngestPipeline(
 
     private const string ChunkingVersion = "v2-title-prefix";
 
-    /// <summary>First "# " heading text, else the file name without extension.</summary>
+    /// <summary>First "# " heading text, else the file name (path mode) or the
+    /// last URL segment / host (crawl mode).</summary>
     private static string PageTitle(LoadedPage page)
     {
         var line = page.Text.Split('\n').FirstOrDefault(l => l.StartsWith("# "));
-        return line is null ? Path.GetFileNameWithoutExtension(page.RelativePath) : line[2..].Trim();
+        if (line is not null) return line[2..].Trim();
+        if (Uri.TryCreate(page.Key, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https")
+        {
+            var segment = uri.Segments.Length > 0 ? uri.Segments[^1].TrimEnd('/') : "";
+            var withoutExt = Path.GetFileNameWithoutExtension(segment);
+            return withoutExt.Length > 0 ? withoutExt : uri.Host;
+        }
+        return Path.GetFileNameWithoutExtension(page.Key);
     }
 
     private static string Sha256Hex(string text)

@@ -2,7 +2,8 @@ using System.Text.RegularExpressions;
 
 namespace CsAgent.Core;
 
-public sealed record LoadedPage(string RelativePath, string Text);
+/// <summary>Page identity: relative path (path mode) or absolute URL (crawl mode).</summary>
+public sealed record LoadedPage(string Key, string Text);
 
 public sealed record LoadReport(IReadOnlyList<LoadedPage> Pages, IReadOnlyList<string> Skipped);
 
