@@ -1,5 +1,15 @@
 # TODOS — cs-agent
 
+## OPEN: versioned-docs URLs flood top-k with near-clone chunks (issue #6, filed 2026-09-06)
+
+Live crawl of docusaurus.io/docs: same page served at many versioned URLs
+(`/docs/`, `/docs/3.9.2/`, `/docs/next/`) ingests as distinct pages; top-k=8
+fills with near-identical chunks (scores 0.7457–0.7436), retrieval diversity
+collapses, install question escalated 3/3 while non-duplicated questions
+resolved first try. Fix candidates in the issue (URL version-segment dedupe /
+chunk near-dup suppression / reranking). Natural pairing: the post-publish
+reranking upgrade.
+
 ## DONE: URL crawl ingest mode (closed 2026-09-06; was design-doc post-publish item, issue #4)
 
 **What shipped (PR #5, merged 7a0c18b):** `cs-agent ingest <url>` — same-domain
