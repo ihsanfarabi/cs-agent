@@ -55,9 +55,9 @@ ingest ──► retrieve top-k ──► draft (cited) ──► verify (ONE mo
 git clone https://github.com/ihsanfarabi/cs-agent.git && cd cs-agent
 dotnet tool install -g cs-agent --add-source <packed nupkg dir>   # or: dotnet run --project src/CsAgent.Cli
 
-# 1. set your provider (any OpenAI-compatible endpoint; defaults use OpenRouter)
+# 1. set your key (any OpenAI-compatible endpoint; defaults use OpenRouter)
 export CS_AGENT_MODEL_KEY=sk-or-...
-export CS_AGENT_BASE_URL=https://openrouter.ai/api/v1
+export CS_AGENT_BASE_URL=https://your-endpoint/v1   # optional — only if NOT OpenRouter
 
 # 2. ingest your docs (local .md/.html; fixtures/ is the built-in eval corpus)
 cs-agent ingest ./your-docs

@@ -42,6 +42,6 @@ public class CsAgentConfigTests
         var config = CsAgentConfig.FromEnvironment(Env(("CS_AGENT_MODEL_KEY", "k")), new HashSet<string> { "fixtures" });
         Assert.Equal(8, config.TopK);
         Assert.Equal(1200, config.ChunkSize);
-        Assert.Equal("https://api.openai.com/v1", config.BaseUrl);
+        Assert.Equal("https://openrouter.ai/api/v1", config.BaseUrl);
     }
 }

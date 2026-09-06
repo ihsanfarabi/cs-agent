@@ -45,7 +45,7 @@ public sealed record CsAgentConfig(
         var topK = ValidateInt(env, "CS_AGENT_TOP_K", 8, min: 1, max: 50);
         var chunkSize = ValidateInt(env, "CS_AGENT_CHUNK_SIZE", 1200, min: 200, max: 10_000);
         var overlap = ValidateInt(env, "CS_AGENT_CHUNK_OVERLAP", 150, min: 0, max: chunkSize - 1);
-        var baseUrl = NonEmpty(env, "CS_AGENT_BASE_URL", "https://api.openai.com/v1");
+        var baseUrl = NonEmpty(env, "CS_AGENT_BASE_URL", "https://openrouter.ai/api/v1");
 
         return new CsAgentConfig(
             ModelKey: key,
