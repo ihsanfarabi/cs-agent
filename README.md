@@ -129,7 +129,7 @@ unanswerable escalated, proxy 0 — `eval` exits 1 on a miss (honest-fail).
 |---|---|---|---|---|
 | gpt-4o + gpt-4o-mini | 20/20 | 5/5 | 0 | 0.95 |
 | deepseek-v4-flash-0731 + gpt-4o-mini | 18–20/20 | 5/5 | 0 | 0.91–0.93 |
-| deepseek-v4-flash-0731 (both roles) *(default)* | 20/20 | 5/5 | 0 | 0.92–0.95 |
+| deepseek-v4-flash-0731 (both roles) *(default)* | 17–20/20 | 5/5 | 0 | 0.89–0.93 |
 | z-ai/glm-5.3-flash (both roles) | 20/20 | 5/5 | 0 | 0.93 |
 | qwen/qwen3.8-flash (both roles) | 20/20 | 5/5 | 0 | 0.95 |
 | inclusionai/ling-3.0-flash-fin (both roles) | 19/20 | 5/5 | 0 | 0.88 |
@@ -142,14 +142,16 @@ locked, and never influenced them. Run with `cs-agent eval --heldout`.
 
 | Draft + verify pair | Answerable | Unanswerable | Proxy | Citation Jaccard |
 |---|---|---|---|---|
-| deepseek-v4-flash-0731 (both roles) *(default)* | 16/16 | 4/4 | 0 | 0.97 |
+| deepseek-v4-flash-0731 (both roles) *(default)* | 15–16/16 | 4/4 | 0 | 0.91–0.97 |
 
-One live run, 2026-09-06 (the `live-eval` workflow, which gates both sets). A
-local run of the same pair scored 15/16 with one sampling-variance miss — the
-same non-determinism the caveat below records. **One-shot rule:** if a future
-change misses a held-out question, fix the prompt or model and REPLACE that
-question with a fresh one — a question tuned against its own miss is in-sample
-from that moment. The gate for both sets is the same honest-fail exit code.
+Two live runs, 2026-09-06 (the `live-eval` workflow, which gates both sets):
+16/16 with the original prompts, 15/16 with the prompt hardening shipped in
+the URL-crawl release. A local run of the same pair also scored 15/16 with one
+sampling-variance miss — the same non-determinism the caveat below records.
+**One-shot rule:** if a future change misses a held-out question, fix the
+prompt or model and REPLACE that question with a fresh one — a question tuned
+against its own miss is in-sample from that moment. The gate for both sets is
+the same honest-fail exit code.
 
 Caveats, stated plainly:
 
@@ -163,7 +165,8 @@ Caveats, stated plainly:
   fresh run scored 18/20 — both misses escalated correctly-cited borderline
   answers and resolved on immediate re-ask (sampling variance, not a model
   defect); that variance is why the default moved to all-deepseek, which has
-  held 20/20 across both its runs.
+  scored 17–20/20 across three live runs — every miss escalated instead of
+  hallucinating, and every run stayed above the 80% gate.
 - **Hallucination proxy undercounts.** It counts zero-overlap resolutions only;
   a wrong answer that happens to cite the right page passes it by design. It is
   reproducible and independent of the live verifier, which is why it exists.
