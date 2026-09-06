@@ -1,0 +1,38 @@
+name: live-eval
+
+# Manual only — never on push/PR, never blocks anything. Real model calls
+# (~75 per run, all-deepseek defaults) against the same 25-question fixture.
+on:
+  workflow_dispatch:
+
+jobs:
+  live-eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CS_AGENT_MODEL_KEY: ${{ secrets.CS_AGENT_MODEL_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - run: dotnet build -c Release
+
+      # eval exit code is the gate: 0 pass / 1 miss (honest-fail).
+      - name: Run live eval
+        run: |
+          set -o pipefail
+          dotnet run --project src/CsAgent.Cli -c Release --no-build -- eval --fresh | tee eval.out
+
+      - name: Write metrics to job summary
+        if: always()
+        run: |
+          {
+            echo "## Live eval — $GITHUB_REF_NAME"
+            echo
+            echo '```'
+            cat eval.out
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
