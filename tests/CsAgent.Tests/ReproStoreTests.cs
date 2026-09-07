@@ -87,12 +87,14 @@ public sealed class ReproStoreTests
         using var store = ReproStore.OpenStore();
         var chunks = ReproStore.ReadChunks(ReproStore.FindDbPath()!);
 
-        // The clone hub: the family spanning the most distinct versioned page_paths.
-        var hub = chunks
-            .GroupBy(c => CloneFamilyKey(c.PagePath))
-            .OrderByDescending(g => g.GroupBy(c => c.PagePath).Count())
-            .First();
-        var hubFamily = CloneFamilyKey(hub.First().PagePath);
+        // The issue #6 scenario family, pinned: the installation page cloned
+        // across versioned URLs (twins ~0.999 per the D5.1 measurement). Do NOT
+        // pick "family with the most versions" — that selects the blog/releases
+        // regex over-group (14 DIFFERENT release posts, mutual sims ~0.77, not
+        // clones, legitimately all attractive to a release-post query).
+        var hubFamily = "https:/docusaurus.io/docs/installation";
+        var hub = chunks.Where(c => CloneFamilyKey(c.PagePath) == hubFamily).ToList();
+        Assert.NotEmpty(hub); // wrong repro store or changed paths — STOP-class anomaly
         _output.WriteLine(
             $"clone hub: family '{hubFamily}', {hub.GroupBy(c => c.PagePath).Count()} versions, {hub.Count()} chunks");
 
