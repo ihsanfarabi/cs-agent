@@ -10,6 +10,53 @@ resolved first try. Fix candidates in the issue (URL version-segment dedupe /
 chunk near-dup suppression / reranking). Natural pairing: the post-publish
 reranking upgrade.
 
+## OPEN: evidence flag on POST /ask — `?evidence=true` trace bundle (deferred 2026-09-07, HTTP-API eng review D9)
+
+**What:** optional `?evidence=true` trace bundle: retrieved chunks, raw
+verifier claims JSON, per-claim support — rejected-draft content clearly
+labeled gated. (Contract re-shaped after the 202 upgrade: POST /ask returns
+202 immediately, so the bundle rides GET /result/{id}, e.g.
+`/result/{id}?evidence=true` on the done poll.)
+
+**Why:** strongest portfolio demo of the verifier gate ("escalations
+auditable over curl"); today an escalation's reasoning is only visible
+via the CLI render.
+
+**Context:** declined as Approach C in the 2026-09-07 office-hours session
+(design-2026-09-07-http-api.md "Approaches") purely on plan-faithful
+grounds, not merit. Cheap increment once the HTTP API ships. Start:
+optional query param + response extension in CsAgent.Http, reuse
+AskResult internals.
+
+**Depends on:** HTTP API v1 shipped (plan of record:
+design-2026-09-07-http-api.md).
+
+## DONE: 202 + GET /result/{id} upgrade — triggered by measured p95, shipped with the HTTP API (2026-09-07; was eng review D10)
+
+**Trigger:** p95 computed from existing `eval-results/*.json` (45 live
+asks, 2026-09-06, default deepseek pair): combined **31.3s** (tuning 33.9s,
+heldout 23.7s), 18/45 asks over the ~15s threshold — 2x over, so the
+pre-authorized upgrade executed BEFORE any sync handler was built.
+
+**What shipped (with the HTTP API v1):**
+- POST /ask always returns 202 `{"id","status":"running","result"}` — sync
+  /ask never existed (D17); GET /result/{id} polls status-in-body (D19):
+  404 unknown · 200 running · 200 canonical AskResult when done · recorded
+  registry 5xx replayed when errored.
+- In-process ConcurrentDictionary job store, no eviction/persistence (D18):
+  restart loses ids, resubmit to recover — documented in README limitation #5.
+- CancellationToken threaded through AskPipeline.Run (the one deliberate
+  Core change): retrieve/draft/verify observe it; shutdown cancels running
+  jobs; VerifyOnce keeps fail-closed for every non-cancellation failure
+  (cancellation propagates instead of fabricating a verdict).
+- Eng-review D4 live pin: dead-BaseUrl check exposed the OpenAI/ClientModel
+  retry path surfacing a BARE ClientResultException with no inner exception
+  — the 502 is-or-wraps rule shipped with ClientResultException added, plus
+  its own scripted test.
+- Tests: 110/110 green (12 HTTP endpoint + 7 serve fail-fast + 2
+  cancellation added); full suite in design-2026-09-07-http-api.md
+  Implementation Tasks T0-T5 (all checked).
+
 ## DONE: URL crawl ingest mode (closed 2026-09-06; was design-doc post-publish item, issue #4)
 
 **What shipped (PR #5, merged 7a0c18b):** `cs-agent ingest <url>` — same-domain

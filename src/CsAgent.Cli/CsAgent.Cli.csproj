@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\CsAgent.Core\CsAgent.Core.csproj" />
+    <ProjectReference Include="..\CsAgent.Http\CsAgent.Http.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -14,6 +15,7 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <InterceptorsNamespaces>$(InterceptorsNamespaces);Microsoft.AspNetCore.OpenApi.Generated</InterceptorsNamespaces>
 
     <!-- dotnet tool packaging (Next Step 9) -->
     <PackAsTool>true</PackAsTool>
