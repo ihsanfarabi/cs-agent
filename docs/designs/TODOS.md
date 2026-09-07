@@ -21,6 +21,30 @@ limitiation text. Design doc `docs/designs/design-2026-09-07-docker-ghcr.md`
 "Not in scope" section lists the same items (that list goes stale; this
 entry is the living one).
 
+## DONE: Dockerfile + GHCR image (closed 2026-09-07; was design-doc post-publish item 3)
+
+**What shipped:** multi-stage Dockerfile (framework-dependent CLI publish onto
+aspnet:10.0, non-root `app` user, `/data` volume, `CS_AGENT_BIND=0.0.0.0` +
+`CS_AGENT_STORE=/data/cs-agent.db` baked in) + `.github/workflows/docker.yml`
+(PR + main push: amd64 build-only, never pushes, read-only token; tag v*: one
+buildx build cross-compiled from the native SDK stage — no QEMU — pushing
+`ghcr.io/ihsanfarabi/cs-agent` as a single multi-arch manifest with `vX.Y.Z`,
+`X.Y.Z`, `latest`; own tag==csproj-version guard, `packages: write` scoped to
+tag refs only, 15-min timeout). Core change: one — `ServeRunner` gained
+`ParseBind` (`CS_AGENT_BIND`, default loopback, hostnames rejected, wildcard
+allowed, IPv6 bracketed for UseUrls) plus the non-loopback stderr warning; bad
+value is named error `serve/bad-bind`, exit 1, before any socket or store open.
+Zero Core pipeline changes; eval gates untouched. Tests: 8 ParseBind cases +
+3 Run tests added (fail-fast ordering + both warning directions, port-pinned
+env hygiene; 130 total, all green). The image is the full CLI —
+ingest and serve share the `/data` volume; MCP stays a NuGet tool (not in the
+image, documented). Workflow note: the originally sketched native-runner
+matrix was replaced by QEMU at plan time (per-platform matrix pushes overwrite
+the tag manifest instead of merging), then QEMU was replaced by the
+cross-compile pattern per outside-voice review (D9) — SDK runs native on
+`$BUILDPLATFORM`, `TARGETARCH` picks the RID; design doc premise 6 records
+both revisions.
+
 ## OPEN: versioned-docs URLs flood top-k with near-clone chunks (issue #6, filed 2026-09-06)
 
 Live crawl of docusaurus.io/docs: same page served at many versioned URLs
