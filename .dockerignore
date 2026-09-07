@@ -1,0 +1,10 @@
+**/bin/
+**/obj/
+*.db
+.cs-agent-recency
+eval-results/
+.git/
+.github/
+docs/
+prototype/
+tests/
