@@ -20,6 +20,7 @@ public sealed record AskJob(
     string Id,
     AskJobStatus Status,
     AskResult? Result,
+    AskEvidence? Evidence,
     ProblemDetails? Error,
     int? ErrorStatus);
 
@@ -47,7 +48,7 @@ public sealed class AskJobStore
     public string Submit(string question)
     {
         var id = Guid.NewGuid().ToString("N");
-        _jobs[id] = new AskJob(id, AskJobStatus.Running, null, null, null);
+        _jobs[id] = new AskJob(id, AskJobStatus.Running, null, null, null, null);
         _ = RunAsync(id, question);
         return id;
     }
@@ -57,6 +58,13 @@ public sealed class AskJobStore
         AskJob completed;
         try
         {
+            // Detach from the submit call stack: under the fake test seam every
+            // await below completes synchronously, so without this yield the
+            // whole job would run inline inside POST /ask and the 202 would
+            // leave only after execution. Real model calls are the async
+            // boundary in production; the yield makes the detachment hold for
+            // the tests too — no other behavior changes.
+            await Task.Yield();
             await _gate.WaitAsync(_shutdown);
             try { completed = Execute(id, question); }
             finally { _gate.Release(); }
@@ -66,7 +74,7 @@ public sealed class AskJobStore
             // shutdown cancelled a queued or running job — recorded honestly;
             // every id dies with the process anyway (in-memory store)
             var (status, problem) = ProblemMapping.Cancelled();
-            completed = new AskJob(id, AskJobStatus.Errored, null, problem, status);
+            completed = new AskJob(id, AskJobStatus.Errored, null, null, problem, status);
         }
         _jobs[id] = completed;
     }
@@ -77,13 +85,13 @@ public sealed class AskJobStore
         {
             // verdict-before-output holds: Done is only recorded after the
             // resolve/escalate verdict exists inside AskResult
-            var result = _pipeline.Run(question, _shutdown);
-            return new AskJob(id, AskJobStatus.Done, result, null, null);
+            var run = _pipeline.RunWithEvidence(question, _shutdown);
+            return new AskJob(id, AskJobStatus.Done, run.Result, run.Evidence, null, null);
         }
         catch (Exception ex)
         {
             var (status, problem) = ProblemMapping.Map(ex);
-            return new AskJob(id, AskJobStatus.Errored, null, problem, status);
+            return new AskJob(id, AskJobStatus.Errored, null, null, problem, status);
         }
     }
 }

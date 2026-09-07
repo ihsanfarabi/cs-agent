@@ -99,12 +99,13 @@ public sealed class HttpApiTests : IDisposable
     }
 
     /// <summary>Poll until the job leaves running: done (200 AskResult) or errored (mapped 5xx).</summary>
-    private static async Task<HttpResponseMessage> PollSettledAsync(HttpClient client, string id, int seconds = 30)
+    private static async Task<HttpResponseMessage> PollSettledAsync(
+        HttpClient client, string id, int seconds = 30, string query = "")
     {
         var deadline = DateTime.UtcNow.AddSeconds(seconds);
         while (DateTime.UtcNow < deadline)
         {
-            var response = await client.GetAsync($"/result/{id}");
+            var response = await client.GetAsync($"/result/{id}{query}");
             if ((int)response.StatusCode >= 500)
                 return response; // errored: recorded registry status replayed
             if (response.StatusCode == HttpStatusCode.OK)
@@ -320,6 +321,99 @@ public sealed class HttpApiTests : IDisposable
         Assert.Equal("""{"status":"ok"}""", await response.Content.ReadAsStringAsync());
         Assert.Equal(0, draft.CallCount);
         Assert.Equal(0, verify.CallCount);
+    }
+
+    [Fact]
+    public async Task EvidencePoll_EnvelopeResultByteIdenticalToBarePoll()
+    {
+        using var client = await StartAsync(MakePipeline(
+            "Rotate keys from Settings → API keys → Rotate. Old keys stay valid 24 hours. [1]", ResolvedJson));
+
+        var id = await SubmitAsync(client, "How do I rotate the API key?");
+        using var done = await PollSettledAsync(client, id);
+        Assert.Equal(HttpStatusCode.OK, done.StatusCode);
+        var bare = await done.Content.ReadAsStringAsync();
+
+        // same job, evidence poll: canonical result nested, byte-identical
+        using var withEvidence = await client.GetAsync($"/result/{id}?evidence=true");
+        Assert.Equal(HttpStatusCode.OK, withEvidence.StatusCode);
+        var envelope = JsonSerializer.Deserialize<AskEvidenceEnvelope>(
+            await withEvidence.Content.ReadAsStringAsync(), CsAgentJson.SerializerOptions)!;
+        Assert.True(envelope.Result.Resolved);
+        Assert.Equal(bare, JsonSerializer.Serialize(envelope.Result, CsAgentJson.SerializerOptions));
+        Assert.Equal(ResolvedJson, envelope.Evidence.VerifierRaw);
+        Assert.False(envelope.Evidence.DraftRejected);
+        Assert.Contains("Rotate keys", envelope.Evidence.DraftAnswer);
+    }
+
+    [Fact]
+    public async Task EscalatedEvidencePoll_RejectedDraftGatedUnderEvidence()
+    {
+        const string draft = "Rotate from Settings [1]. SLA uptime is 99.9%.";
+        using var client = await StartAsync(MakePipeline(draft, EscalateJson));
+
+        var id = await SubmitAsync(client, "What is your SLA uptime?");
+        using var done = await PollSettledAsync(client, id);
+        using var withEvidence = await client.GetAsync($"/result/{id}?evidence=true");
+        Assert.Equal(HttpStatusCode.OK, withEvidence.StatusCode);
+
+        var envelope = JsonSerializer.Deserialize<AskEvidenceEnvelope>(
+            await withEvidence.Content.ReadAsStringAsync(), CsAgentJson.SerializerOptions)!;
+        Assert.False(envelope.Result.Resolved);
+        Assert.Null(envelope.Result.Answer); // rejected draft never surfaces in the canonical result
+        Assert.Equal(draft, envelope.Evidence.DraftAnswer); // ...only inside evidence, explicitly gated
+        Assert.True(envelope.Evidence.DraftRejected);
+        Assert.NotEmpty(envelope.Result.Missing!);
+    }
+
+    [Fact]
+    public async Task EvidencePollWhileRunning_StillRunningShape()
+    {
+        // draft blocks until released — pins the running poll deterministically
+        // (evidence flag must not change the running body; verdict-before-output:
+        // no trace exists before Done)
+        var started = new ManualResetEventSlim(false);
+        var release = new ManualResetEventSlim(false);
+        using var client = await StartAsync(MakeThrowingPipeline(
+            _ => { started.Set(); release.Wait(10_000); return "Rotate from Settings [1]."; },
+            _ => ResolvedJson));
+
+        var id = await SubmitAsync(client, "How do I rotate the API key?");
+        Assert.True(started.Wait(10_000), "draft model call never started");
+        using var running = await client.GetAsync($"/result/{id}?evidence=true");
+        Assert.Equal(HttpStatusCode.OK, running.StatusCode);
+        var body = await ReadJsonAsync(running);
+        Assert.Equal("running", body.GetProperty("status").GetString());
+
+        release.Set();
+        using var settled = await PollSettledAsync(client, id);
+        Assert.Equal(HttpStatusCode.OK, settled.StatusCode);
+    }
+
+    [Fact]
+    public async Task EvidencePollUnknownJob_404()
+    {
+        using var client = await StartAsync(MakePipeline("Rotate [1].", ResolvedJson));
+        using var response = await client.GetAsync("/result/deadbeef?evidence=true");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Contains("urn:cs-agent:http:unknown-job", await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task EvidencePollOnErroredJob_Replays5xxNoEnvelope()
+    {
+        using var client = await StartAsync(MakeThrowingPipeline(
+            _ => throw new HttpRequestException("connection refused"), _ => ResolvedJson));
+        var id = await SubmitAsync(client, "How do I rotate the API key?");
+        using var errored = await PollSettledAsync(client, id);
+        Assert.Equal(HttpStatusCode.BadGateway, errored.StatusCode);
+
+        using var withEvidence = await client.GetAsync($"/result/{id}?evidence=true");
+        Assert.Equal(HttpStatusCode.BadGateway, withEvidence.StatusCode); // replay, unchanged
+        var body = await withEvidence.Content.ReadAsStringAsync();
+        Assert.Contains("urn:cs-agent:model:transport", body);
+        Assert.DoesNotContain("\"evidence\"", body); // an errored job has no trace — no fabricated bundle
     }
 
     [Fact]

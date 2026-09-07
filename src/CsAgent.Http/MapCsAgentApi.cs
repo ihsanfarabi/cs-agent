@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using CsAgent.Core;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -39,7 +40,7 @@ public static class CsAgentApiExtensions
             return Results.Json(new { id, status = "running", result = $"/result/{id}" }, statusCode: 202);
         });
 
-        app.MapGet("/result/{id}", (string id) =>
+        app.MapGet("/result/{id}", (string id, bool evidence = false) =>
         {
             var job = store.Get(id);
             if (job is null)
@@ -49,7 +50,10 @@ public static class CsAgentApiExtensions
             return job.Status switch
             {
                 AskJobStatus.Running => Results.Json(new { id = job.Id, status = "running" }),
-                AskJobStatus.Done => Results.Json(job.Result, CsAgentJson.SerializerOptions),
+                // done + ?evidence=true → envelope; the bare poll stays byte-identical
+                AskJobStatus.Done => evidence && job.Evidence is not null
+                    ? Results.Json(new AskEvidenceEnvelope(job.Result!, job.Evidence), CsAgentJson.SerializerOptions)
+                    : Results.Json(job.Result, CsAgentJson.SerializerOptions),
                 AskJobStatus.Errored => Results.Json(job.Error, statusCode: job.ErrorStatus ?? 500),
                 _ => Bad(500, "internal", "unmapped", null),
             };
@@ -71,3 +75,11 @@ public static class CsAgentApiExtensions
 
 /// <summary>POST /ask body: { "question": string }.</summary>
 public sealed record AskRequest(string? Question);
+
+/// <summary>
+/// GET /result/{id}?evidence=true done body: the canonical AskResult untouched
+/// (byte-identical to the bare poll) with the evidence trace alongside.
+/// </summary>
+public sealed record AskEvidenceEnvelope(
+    [property: JsonPropertyName("result")] AskResult Result,
+    [property: JsonPropertyName("evidence")] AskEvidence Evidence);
