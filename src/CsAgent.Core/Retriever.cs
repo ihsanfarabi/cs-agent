@@ -12,9 +12,9 @@ public sealed record CitedChunk(
 /// <summary>Query embed + top-k from the store; chunks numbered [1..k] for citation.</summary>
 public sealed class Retriever(IEmbeddingGenerator<string, Embedding<float>> embeddings, SqliteVectorStore store, int topK)
 {
-    public IReadOnlyList<CitedChunk> Retrieve(string question)
+    public IReadOnlyList<CitedChunk> Retrieve(string question, CancellationToken cancellationToken = default)
     {
-        var vector = embeddings.GenerateVectorAsync(question).GetAwaiter().GetResult();
+        var vector = embeddings.GenerateVectorAsync(question, cancellationToken: cancellationToken).GetAwaiter().GetResult();
         var hits = store.TopK(vector.Span, topK);
         return [.. hits.Select((h, i) => new CitedChunk(i + 1, h.PagePath, h.Ordinal, h.Text, h.Score))];
     }

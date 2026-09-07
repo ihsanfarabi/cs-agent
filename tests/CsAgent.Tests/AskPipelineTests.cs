@@ -118,4 +118,41 @@ public sealed class AskPipelineTests : IDisposable
         Assert.Equal("What is your SLA uptime?", missing.Claim);
         Assert.Contains("no answerable claim", missing.Note);
     }
+
+    [Fact]
+    public void CancelledBeforeRun_ThrowsBeforeAnyModelCall()
+    {
+        var (pipeline, draft, verify) = MakePipeline("Rotate from Settings [1].", ResolvedJson, ResolvedJson);
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        Assert.Throws<OperationCanceledException>(() => pipeline.Run("How do I rotate keys?", cts.Token));
+        Assert.Equal(0, draft.CallCount);
+        Assert.Equal(0, verify.CallCount);
+    }
+
+    [Fact]
+    public void CancelledDuringVerify_PropagatesInsteadOfFailingClosed()
+    {
+        SeedStore();
+        var embeddings = new FakeEmbeddingGenerator();
+        var store = new SqliteVectorStore(_dbPath, "fake-embedding");
+        var retriever = new Retriever(embeddings, store, topK: 5);
+        var draftClient = new FakeChatClient(_ => "Rotate from Settings [1].");
+        using var cts = new CancellationTokenSource();
+        var verifyClient = new FakeChatClient(_ =>
+        {
+            cts.Cancel(); // server shutdown lands mid-verify
+            throw new OperationCanceledException(cts.Token);
+        });
+
+        ChatClientAgent Draft() => new(draftClient);
+        ChatClientAgent Verify() => new(verifyClient);
+        var pipeline = new AskPipeline(Draft, Verify, retriever);
+
+        // shutdown propagates — the job dies as cancelled, never fabricates a
+        // fail-closed verdict (non-cancellation failures still fail closed)
+        Assert.Throws<OperationCanceledException>(() => pipeline.Run("How do I rotate keys?", cts.Token));
+        Assert.Equal(1, verifyClient.CallCount); // no retry on cancellation
+    }
 }

@@ -30,19 +30,23 @@ public sealed class AskPipeline(
     Retriever retriever,
     Action<string>? progress = null)
 {
-    public AskResult Run(string question)
+    public AskResult Run(string question, CancellationToken cancellationToken = default)
     {
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        cancellationToken.ThrowIfCancellationRequested();
         progress?.Invoke("retrieving");
-        var chunks = retriever.Retrieve(question);
+        var chunks = retriever.Retrieve(question, cancellationToken);
 
+        cancellationToken.ThrowIfCancellationRequested();
         progress?.Invoke("drafting");
         var draft = draftAgentFactory();
-        var draftResponse = draft.RunAsync(FormatDraftPrompt(question, chunks)).GetAwaiter().GetResult();
+        var draftResponse = draft.RunAsync(
+            FormatDraftPrompt(question, chunks), cancellationToken: cancellationToken).GetAwaiter().GetResult();
         var answer = draftResponse.Text.Trim();
 
+        cancellationToken.ThrowIfCancellationRequested();
         progress?.Invoke("verifying");
-        var claims = VerifyOnce(question, answer, chunks);
+        var claims = VerifyOnce(question, answer, chunks, cancellationToken);
 
         stopwatch.Stop();
 
@@ -61,7 +65,7 @@ public sealed class AskPipeline(
     }
 
     private IReadOnlyList<ClaimVerdict>? VerifyOnce(
-        string question, string answer, IReadOnlyList<CitedChunk> chunks)
+        string question, string answer, IReadOnlyList<CitedChunk> chunks, CancellationToken cancellationToken)
     {
         var verify = verifyAgentFactory();
         var prompt = FormatVerifyPrompt(question, answer, chunks);
@@ -69,13 +73,17 @@ public sealed class AskPipeline(
         {
             try
             {
-                var response = verify.RunAsync<IReadOnlyList<ClaimVerdict>>(prompt).GetAwaiter().GetResult();
+                var response = verify.RunAsync<IReadOnlyList<ClaimVerdict>>(
+                    prompt, cancellationToken: cancellationToken).GetAwaiter().GetResult();
                 if (response.Result is not null)
                     return response.Result;
             }
-            catch (Exception)
+            catch (Exception) when (cancellationToken.IsCancellationRequested is false)
             {
-                // malformed structured output — the pipeline's ONLY retry
+                // malformed structured output — the pipeline's ONLY retry.
+                // Cancellation is exempt: shutdown propagates instead of
+                // fabricating a fail-closed verdict (verify stays fail-closed
+                // for every non-cancellation failure — unchanged).
             }
             prompt = prompt + "\n\nYour previous output was not valid JSON. Output ONLY the JSON array.";
         }

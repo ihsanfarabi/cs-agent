@@ -25,7 +25,7 @@ public sealed class EvalRunner(
             if (!fresh && File.Exists(file))
             {
                 results.Add(JsonSerializer.Deserialize<EvalQuestionResult>(
-                File.ReadAllText(file), JsonOpts.Indented)!);
+                File.ReadAllText(file), CsAgentJson.SerializerOptions)!);
                 skipped++;
                 continue;
             }
@@ -42,15 +42,10 @@ public sealed class EvalRunner(
                 record.Question, record.ExpectedOutcome, askResult.Resolved,
                 citedPages, record.ExpectedSources, askResult.Calls,
                 askResult.Seconds, askResult.Resolved == (record.ExpectedOutcome == "resolved"));
-            File.WriteAllText(file, JsonSerializer.Serialize(result, JsonOpts.Indented));
+            File.WriteAllText(file, JsonSerializer.Serialize(result, CsAgentJson.SerializerOptions));
             results.Add(result);
         }
 
         return (EvalScoring.Compute(results), results, skipped);
     }
-}
-
-internal static class JsonOpts
-{
-    public static JsonSerializerOptions Indented { get; } = new() { WriteIndented = true };
 }

@@ -44,9 +44,10 @@ ingest ──► retrieve top-k ──► draft (cited) ──► verify (ONE mo
 - **Escalate is the safe default.** Any unsupported claim, zero claims, or
   malformed verifier JSON twice → escalate, with a `missing[]` payload naming what
   the docs lack. A rejected draft is never printed.
-- **One result object, three surfaces.** `answer · citations · claims[] · calls ·
+- **One result object, every surface.** `answer · citations · claims[] · calls ·
   seconds · estimated_cost` live in one object; the CLI renders it (plus `--json`),
-  the MCP server exposes the fields, and eval scores it.
+  the HTTP poll returns it byte-identical, the MCP server exposes the fields, and
+  eval scores it.
 
 ## Quickstart
 
@@ -70,6 +71,9 @@ cs-agent ask --json "What is your SLA?"    # machine-readable result object
 
 # 4. score the engine against the built-in fixture (exit 0 = pass gate)
 cs-agent eval
+
+# 5. (optional) expose the same engine over loopback HTTP
+cs-agent serve
 ```
 
 Default models (eval-gated pair, see below): `deepseek/deepseek-v4-flash-0731`
@@ -171,6 +175,52 @@ Caveats, stated plainly:
   a wrong answer that happens to cite the right page passes it by design. It is
   reproducible and independent of the live verifier, which is why it exists.
 
+## HTTP API
+
+`cs-agent serve` starts a loopback-only HTTP server exposing the same result
+object (default port 5123; `--port N` or `CS_AGENT_PORT` overrides it).
+Asks are slow — p95 31.3s measured over 45 live asks on the default pair,
+2026-09-06 — so `/ask` never blocks: it returns `202` plus a job id, and the
+client polls:
+
+```bash
+$ cs-agent serve
+listening on http://127.0.0.1:5123 — POST /ask · GET /result/{id} · GET /health · /openapi/v1.json
+
+# 1. submit
+$ curl -s http://127.0.0.1:5123/ask -H 'Content-Type: application/json' \
+    -d '{"question": "How do I rotate the API key?"}'
+{"id":"e2e19695…","status":"running","result":"/result/e2e19695…"}
+
+# 2. poll until status leaves "running"
+$ curl -s http://127.0.0.1:5123/result/e2e19695…
+{ "question": "How do I rotate the API key?", "resolved": true, "answer": "…", … }
+```
+
+- **Done → 200** with the canonical `AskResult` JSON — byte-identical to
+  `cs-agent ask --json` for the same question (one result object, one shared
+  serializer declaration). An escalation is a 200 done with `resolved:false`
+  and `missing[]` populated, never an error.
+- **Errored → the recorded 5xx**, replayed on every poll: RFC 9457
+  ProblemDetails with stable `type` URNs — `urn:cs-agent:store:empty-store`
+  → 503, `urn:cs-agent:model:transport` → 502 when a model call cannot reach
+  the provider (matched on exception type at any wrap depth, including the
+  OpenAI SDK's bare `ClientResultException`). No stack trace ever reaches a
+  response body.
+- **Unknown id → 404.** Jobs live in process memory — a restart loses every
+  id; resubmit to recover (documented v1 cut: no persistence, no eviction, no
+  DELETE endpoint).
+- Asks run **one at a time** behind a single pipeline; concurrent submits
+  queue. `GET /health` answers 200 without touching the store or a model.
+- The server binds `127.0.0.1` only — it is explicitly a no-auth,
+  no-rate-limit local tool; non-loopback bind waits for auth work.
+
+`serve` fails fast at startup with a named structured error and exit 1 — on a
+bad port, a missing store path (checked before construction, so a refusal
+leaves no stray empty `.db` behind), a corrupt store, an embedding-model
+mismatch, or an empty store (no documents ingested). The OpenAPI document
+lives at `/openapi/v1.json`.
+
 ## MCP server
 
 `src/CsAgent.Mcp` is an MCP stdio server exposing `ask` and `ingest` tools with
@@ -212,8 +262,11 @@ installable product with an eval harness.
 4. **Tuning-set numbers are in-sample** — generalization is measured by the
    held-out set above, which stays one-shot (missed questions get replaced,
    not re-tuned).
+5. **HTTP jobs are in-process memory** — `serve` loses all job ids on
+   restart (poll → 404, resubmit to recover); no eviction, TTL, or DELETE.
+   Persistence waits for the Docker/postgres work.
 
-Deferred work: an HTTP API, Docker packaging, Postgres storage, and
+Deferred work: Docker packaging, Postgres storage, and
 escalation-with-actions (the escalation path gaining MAF tool-calling so a
 "cannot answer" can open a ticket or notify a human).
 

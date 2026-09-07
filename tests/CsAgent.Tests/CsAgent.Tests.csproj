@@ -23,6 +23,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\CsAgent.Core\CsAgent.Core.csproj" />
     <ProjectReference Include="..\..\src\CsAgent.Cli\CsAgent.Cli.csproj" />
+    <ProjectReference Include="..\..\src\CsAgent.Http\CsAgent.Http.csproj" />
     <ProjectReference Include="..\..\src\CsAgent.Mcp\CsAgent.Mcp.csproj" />
   </ItemGroup>
 

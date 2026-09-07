@@ -1,3 +1,4 @@
+using CsAgent.Cli;
 using CsAgent.Core;
 
 try
@@ -8,6 +9,7 @@ try
         ["ingest", var path] => Ingest(path, config), // path or http(s) URL
         ["ask", ..] => Ask(args, config),
         ["eval", ..] => Eval(args, config),
+        ["serve", ..] => Serve(args, config),
         ["--version"] => PrintVersion(),
         _ => Usage(),
     };
@@ -49,8 +51,7 @@ try
 
         if (json)
         {
-            Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(result,
-                new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+            Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(result, CsAgentJson.SerializerOptions));
         }
         else
         {
@@ -101,6 +102,8 @@ try
         return passed ? 0 : 1;
     }
 
+    int Serve(string[] serveArgs, CsAgentConfig cfg) => ServeRunner.Run(serveArgs, cfg);
+
     static void Render(AskResult r)
     {
         var supported = r.Claims.Count(c => c.Supported);
@@ -144,7 +147,7 @@ try
 
     int Usage()
     {
-        Console.Error.WriteLine("usage: cs-agent <ingest <path-or-url> | ask [--json] \"<question>\" | eval [--heldout] [--fresh]>");
+        Console.Error.WriteLine("usage: cs-agent <ingest <path-or-url> | ask [--json] \"<question>\" | eval [--heldout] [--fresh] | serve [--port N]>");
         return 1;
     }
 }

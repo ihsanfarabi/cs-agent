@@ -82,7 +82,7 @@ public sealed partial class EvalGateTests : IDisposable
         }));
 
         var pipeline = new AskPipeline(Draft, Verify, retriever);
-        var runner = new EvalRunner(pipeline.Run, _resultsDir);
+        var runner = new EvalRunner(q => pipeline.Run(q), _resultsDir);
         return runner.Run(records, fresh: true);
     }
 
