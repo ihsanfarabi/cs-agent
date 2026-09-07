@@ -132,6 +132,68 @@ public sealed class AskPipelineTests : IDisposable
     }
 
     [Fact]
+    public void RunWithEvidence_Resolved_CapturesDraftAndRawVerifierJson()
+    {
+        var (pipeline, _, _) = MakePipeline(
+            "Rotate keys from Settings → API keys → Rotate. Old keys stay valid 24 hours. [1]",
+            ResolvedJson, ResolvedJson);
+
+        var run = pipeline.RunWithEvidence("How do I rotate the API key?");
+        Assert.True(run.Result.Resolved);
+        Assert.False(run.Evidence.DraftRejected);
+        Assert.Equal(run.Result.Answer, run.Evidence.DraftAnswer); // accepted draft, identical
+        Assert.Equal(ResolvedJson, run.Evidence.VerifierRaw);       // raw verifier output, exact
+    }
+
+    [Fact]
+    public void RunWithEvidence_Escalated_RejectedDraftAndRawCaptured()
+    {
+        var (pipeline, _, _) = MakePipeline(
+            "Rotate from Settings [1]. SLA uptime is 99.9%.",
+            EscalateJson, EscalateJson);
+
+        var run = pipeline.RunWithEvidence("What is your SLA uptime?");
+        Assert.False(run.Result.Resolved);
+        Assert.Null(run.Result.Answer); // canonical surface keeps the rejection hidden
+        Assert.Equal("Rotate from Settings [1]. SLA uptime is 99.9%.", run.Evidence.DraftAnswer);
+        Assert.True(run.Evidence.DraftRejected); // the trace labels it gated, explicitly
+        Assert.Equal(EscalateJson, run.Evidence.VerifierRaw);
+    }
+
+    [Fact]
+    public void RunWithEvidence_MalformedTwice_RawIsLastVerifierOutput()
+    {
+        var (pipeline, _, _) = MakePipeline(
+            "Rotate from Settings [1].", "THIS IS NOT JSON", "STILL NOT JSON");
+
+        var run = pipeline.RunWithEvidence("How do I rotate keys?");
+        Assert.False(run.Result.Resolved);
+        Assert.Equal(3, run.Result.Calls); // draft + 2 verify attempts — no new calls
+        Assert.True(run.Evidence.DraftRejected);
+        // the trace shows WHAT was malformed — that is the audit value
+        Assert.Equal("STILL NOT JSON", run.Evidence.VerifierRaw);
+    }
+
+    [Fact]
+    public void RunWithEvidence_VerifierTransportThrows_RawNullStillEscalates()
+    {
+        // verify transport failures fail closed (existing behavior); no response
+        // object existed, so raw is null — never reconstructed (honest evidence)
+        SeedStore();
+        var retriever = new Retriever(
+            new FakeEmbeddingGenerator(), new SqliteVectorStore(_dbPath, "fake-embedding"), topK: 5);
+        ChatClientAgent Draft() => new(new FakeChatClient(_ => "Rotate from Settings [1]."));
+        ChatClientAgent Verify() => new(new FakeChatClient(
+            _ => throw new HttpRequestException("connection refused")));
+        var pipeline = new AskPipeline(Draft, Verify, retriever);
+
+        var run = pipeline.RunWithEvidence("How do I rotate keys?");
+        Assert.False(run.Result.Resolved);
+        Assert.True(run.Evidence.DraftRejected);
+        Assert.Null(run.Evidence.VerifierRaw);
+    }
+
+    [Fact]
     public void CancelledDuringVerify_PropagatesInsteadOfFailingClosed()
     {
         SeedStore();

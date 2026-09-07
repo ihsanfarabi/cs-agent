@@ -21,6 +21,21 @@ public sealed record AskResult(
     [property: JsonPropertyName("estimated_cost")] string? CostEstimate);
 
 /// <summary>
+/// The optional audit trace for one completed ask. Retrieved chunks and
+/// per-claim support already live in AskResult (citations/claims); this adds
+/// what no surface prints: the draft as written — even when the verifier
+/// rejected it — and the raw verifier JSON. Never fabricated: a transport
+/// failure leaves verifier_raw null.
+/// </summary>
+public sealed record AskEvidence(
+    [property: JsonPropertyName("draft_answer")] string DraftAnswer,
+    [property: JsonPropertyName("draft_rejected")] bool DraftRejected,
+    [property: JsonPropertyName("verifier_raw")] string? VerifierRaw);
+
+/// <summary>One completed ask: the canonical result plus its evidence trace.</summary>
+public sealed record AskRun(AskResult Result, AskEvidence Evidence);
+
+/// <summary>
 /// The ask pipeline: retrieve → draft → verify (ONE call) → verdict BEFORE any
 /// output. Verdict exists before this returns; no streaming in v1.
 /// </summary>
@@ -31,6 +46,14 @@ public sealed class AskPipeline(
     Action<string>? progress = null)
 {
     public AskResult Run(string question, CancellationToken cancellationToken = default)
+        => RunWithEvidence(question, cancellationToken).Result;
+
+    /// <summary>
+    /// Run returning the canonical result plus the evidence trace. AskResult
+    /// alone stays the contract every surface renders — Run keeps that shape
+    /// for CLI/MCP/eval; only the HTTP evidence surface reads this method.
+    /// </summary>
+    public AskRun RunWithEvidence(string question, CancellationToken cancellationToken = default)
     {
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         cancellationToken.ThrowIfCancellationRequested();
@@ -46,37 +69,41 @@ public sealed class AskPipeline(
 
         cancellationToken.ThrowIfCancellationRequested();
         progress?.Invoke("verifying");
-        var claims = VerifyOnce(question, answer, chunks, cancellationToken);
+        var (claims, verifierRaw) = VerifyOnce(question, answer, chunks, cancellationToken);
 
         stopwatch.Stop();
 
+        AskResult result;
         if (claims is null)
             // second malformed verdict ⇒ fail closed to escalate
-            return new AskResult(question, false, null,
+            result = new AskResult(question, false, null,
                 [new MissingItem(question, "verifier output malformed twice — failing closed")],
                 [], chunks, Calls: 3, stopwatch.Elapsed.TotalSeconds, CostLine());
-
-        var resolved = VerifierRule.Resolve(claims);
-        return resolved
-            ? new AskResult(question, true, answer, null, claims, chunks, Calls: 2,
-                stopwatch.Elapsed.TotalSeconds, CostLine())
-            : new AskResult(question, false, null, VerifierRule.BuildMissing(claims, question),
+        else if (VerifierRule.Resolve(claims))
+            result = new AskResult(question, true, answer, null, claims, chunks, Calls: 2,
+                stopwatch.Elapsed.TotalSeconds, CostLine());
+        else
+            result = new AskResult(question, false, null, VerifierRule.BuildMissing(claims, question),
                 claims, chunks, Calls: 2, stopwatch.Elapsed.TotalSeconds, CostLine());
+
+        return new AskRun(result, new AskEvidence(answer, !result.Resolved, verifierRaw));
     }
 
-    private IReadOnlyList<ClaimVerdict>? VerifyOnce(
+    private (IReadOnlyList<ClaimVerdict>? Claims, string? Raw) VerifyOnce(
         string question, string answer, IReadOnlyList<CitedChunk> chunks, CancellationToken cancellationToken)
     {
         var verify = verifyAgentFactory();
         var prompt = FormatVerifyPrompt(question, answer, chunks);
+        string? raw = null;
         for (var attempt = 1; attempt <= 2; attempt++)
         {
             try
             {
                 var response = verify.RunAsync<IReadOnlyList<ClaimVerdict>>(
                     prompt, cancellationToken: cancellationToken).GetAwaiter().GetResult();
+                raw = response.Text; // captured BEFORE the Result check — malformed text IS the evidence
                 if (response.Result is not null)
-                    return response.Result;
+                    return (response.Result, raw);
             }
             catch (Exception) when (cancellationToken.IsCancellationRequested is false)
             {
@@ -87,7 +114,7 @@ public sealed class AskPipeline(
             }
             prompt = prompt + "\n\nYour previous output was not valid JSON. Output ONLY the JSON array.";
         }
-        return null; // caller treats null as fail-closed to escalate
+        return (null, raw); // caller treats null claims as fail-closed to escalate
     }
 
     /// <summary>
