@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Sockets;
 using CsAgent.Core;
 using CsAgent.Http;
 using Microsoft.AspNetCore.Builder;
@@ -60,6 +61,23 @@ public static class ServeRunner
             return 1;
         }
 
+        // bind: CS_AGENT_BIND, default loopback (host installs unchanged); validated
+        // BEFORE the store checks, same fail-fast shape as the port above. The
+        // non-loopback warning prints HERE (before store checks) so it reaches
+        // docker logs even when a store error follows.
+        IPAddress bindIp;
+        try
+        {
+            bindIp = ParseBind(Environment.GetEnvironmentVariable("CS_AGENT_BIND"));
+        }
+        catch (CsAgentException ex)
+        {
+            Console.Error.WriteLine(ex.Error);
+            return 1;
+        }
+        if (!IPAddress.IsLoopback(bindIp))
+            Console.Error.WriteLine($"warning: binding {bindIp} — the API is no-auth and unrated; expose only behind a trusted proxy or firewall (CS_AGENT_BIND).");
+
         var storePath = CorpusPointer.ResolveStorePath(cfg.StorePath);
         if (!File.Exists(storePath))
             throw new CsAgentException(new CsAgentError(
@@ -77,11 +95,13 @@ public static class ServeRunner
         var builder = WebApplication.CreateSlimBuilder();
         builder.Services.AddOpenApi(); // /openapi/v1.json documents the surface
         builder.WebHost.ConfigureKestrel(o => o.AddServerHeader = false); // server header suppressed
-        builder.WebHost.UseUrls($"http://127.0.0.1:{port}"); // loopback-only bind — explicitly no-auth API
+        var bind = bindIp.ToString();
+        var brackets = bindIp.AddressFamily == AddressFamily.InterNetworkV6 ? $"[{bind}]" : bind; // UseUrls requires [..] around IPv6 literals
+        builder.WebHost.UseUrls($"http://{brackets}:{port}"); // loopback by default; CS_AGENT_BIND widens (container/proxy case)
         var app = builder.Build();
         app.MapOpenApi();
         app.MapCsAgentApi(pipeline);
-        Console.WriteLine($"listening on http://127.0.0.1:{port} — POST /ask · GET /result/{{id}} · GET /health · /openapi/v1.json");
+        Console.WriteLine($"listening on http://{brackets}:{port} — POST /ask · GET /result/{{id}} · GET /health · /openapi/v1.json");
         try
         {
             app.Run(); // blocks; Ctrl+C = graceful shutdown, running jobs cancelled

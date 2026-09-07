@@ -130,4 +130,63 @@ public sealed class ServeRunnerTests : IDisposable
         Assert.Equal("serve", ex.Error.Component);
         Assert.Equal("bad-bind", ex.Error.Code);
     }
+
+    // --- CS_AGENT_BIND wired into Run (bind honored, warning before store checks) ---
+
+    private static void WithServeEnv(string? bind, Action act)
+    {
+        var prevBind = Environment.GetEnvironmentVariable("CS_AGENT_BIND");
+        var prevPort = Environment.GetEnvironmentVariable("CS_AGENT_PORT");
+        Environment.SetEnvironmentVariable("CS_AGENT_BIND", bind);
+        Environment.SetEnvironmentVariable("CS_AGENT_PORT", null);
+        try { act(); }
+        finally
+        {
+            Environment.SetEnvironmentVariable("CS_AGENT_BIND", prevBind);
+            Environment.SetEnvironmentVariable("CS_AGENT_PORT", prevPort);
+        }
+    }
+
+    [Fact]
+    public void BadBindEnv_Returns1_NoStoreTouched()
+    {
+        // bind is validated BEFORE the store checks (bad-port idiom): this config
+        // points at a missing store, so reaching store-missing would prove wrong order
+        WithServeEnv("localhost", () => Assert.Equal(1, ServeRunner.Run(["serve"], Config())));
+    }
+
+    // Warning is a SAFETY line (no-auth API now reachable): both directions live
+    // in the suite, not only the one-off container smoke. It must print right
+    // after the bind parse — BEFORE the store checks — so it lands in docker logs
+    // even when a store error follows.
+    [Fact]
+    public void NonLoopbackBind_PrintsWarning_BeforeStoreChecks()
+    {
+        var origErr = Console.Error;
+        using var captured = new StringWriter();
+        Console.SetError(captured);
+        try
+        {
+            // missing store: throws AFTER the warning should have printed
+            WithServeEnv("0.0.0.0",
+                () => Assert.Throws<CsAgentException>(() => ServeRunner.Run(["serve"], Config())));
+        }
+        finally { Console.SetError(origErr); }
+        Assert.Contains("warning: binding 0.0.0.0", captured.ToString());
+    }
+
+    [Fact]
+    public void LoopbackDefault_NoWarning()
+    {
+        var origErr = Console.Error;
+        using var captured = new StringWriter();
+        Console.SetError(captured);
+        try
+        {
+            WithServeEnv(null,
+                () => Assert.Throws<CsAgentException>(() => ServeRunner.Run(["serve"], Config())));
+        }
+        finally { Console.SetError(origErr); }
+        Assert.DoesNotContain("warning: binding", captured.ToString());
+    }
 }
