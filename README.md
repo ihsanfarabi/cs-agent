@@ -269,9 +269,9 @@ proxy. Named volumes
 `/data`, it is root-owned inside the container and the non-root app user
 cannot write the store — `chown` it to the container user or run with
 `--user`. There is no HEALTHCHECK directive in the image; orchestrators
-should probe `GET /health`. The MCP stdio server is not in the image — it
-ships separately as a .NET tool, so MCP clients never go through the
-container. Job memory, restart semantics, and all other
+should probe `GET /health`. The MCP stdio server is not in the image — run
+it from source per the MCP section below, so MCP clients never go through
+the container. Job memory, restart semantics, and all other
 HTTP limitations above apply unchanged.
 
 ## MCP server

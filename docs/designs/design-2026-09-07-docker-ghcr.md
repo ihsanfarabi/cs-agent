@@ -189,7 +189,8 @@ ENTRYPOINT ["/app/cs-agent"]
 
 - Only the CLI's project graph is restored and published (Core + Http).
   `CsAgent.Mcp` source rides along in the copy layer but is never built —
-  MCP ships as a NuGet tool, not in the image; documented in README.
+  MCP is not in the image; run it from source (`dotnet run --project
+  src/CsAgent.Mcp`), documented in README.
 - Default container command is `cs-agent` with no args → today prints usage
   exit 1; README examples always pass `serve` (or `ingest`).
 - No HEALTHCHECK directive in v1: the aspnet image ships no curl/wget.
@@ -209,8 +210,8 @@ direct pushes to main, one conditional line); `docker/metadata-action@v5`
 tags `vX.Y.Z`, `X.Y.Z`, `latest`; `build-push-action@v6` with
 `cache-from: type=gha` and `cache-to` only on PRs (multi-platform GHA cache
 export is a known buildx race, buildx #1382); login and push only on tag
-refs, with `permissions: packages: write` scoped to tag refs (none
-otherwise) and a 15-minute timeout. Because `docker.yml` runs in parallel
+refs, with job-level `permissions: contents: read` plus `packages: write`
+scoped to tag refs (packages none otherwise) and a 15-minute timeout. Because `docker.yml` runs in parallel
 with `publish.yml` on a tag push, it carries its own tag == csproj
 `Version` guard. PR/main builds never log in and never push.
 
