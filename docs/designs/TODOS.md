@@ -21,6 +21,22 @@ limitiation text. Design doc `docs/designs/design-2026-09-07-docker-ghcr.md`
 "Not in scope" section lists the same items (that list goes stale; this
 entry is the living one).
 
+## DONE: MMR retrieval diversity — issue #6 closed (2026-09-08)
+
+**What shipped:** `SqliteVectorStore.TopK` replaced by `Pool(query)` (every
+chunk scored, relevance-ordered, vectors retained — same single scan, zero
+extra DB work) + `Retriever.MmrSelect` (classic MMR, λ = 0.7 fixed in code,
+first pick = highest relevance, set returned relevance-descending so
+citation numbering is unchanged). Pool = whole scored set (no fetch_k — eng
+review D1); MMR decides set, relevance decides order (D2). Result object,
+cost model (1 embed, ≤3 LLM calls), env vars, schema: all unchanged; crawled
+corpora benefit with no re-ingest. Verified on the real repro store (D5):
+measured clone-twin vs adjacent-chunk similarity gap, then integration check
+(clone vector as query → top-8 spans distinct pages, zero model calls).
+Eval gates green on the default pair. README limitation #2 rewritten.
+Deferred with it: ingest-time URL canonicalization; reranking/hybrid search
+stay README limitations.
+
 ## DONE: Dockerfile + GHCR image (closed 2026-09-07; was design-doc post-publish item 3)
 
 **What shipped:** multi-stage Dockerfile (framework-dependent CLI publish onto
@@ -44,16 +60,6 @@ the tag manifest instead of merging), then QEMU was replaced by the
 cross-compile pattern per outside-voice review (D9) — SDK runs native on
 `$BUILDPLATFORM`, `TARGETARCH` picks the RID; design doc premise 6 records
 both revisions.
-
-## OPEN: versioned-docs URLs flood top-k with near-clone chunks (issue #6, filed 2026-09-06)
-
-Live crawl of docusaurus.io/docs: same page served at many versioned URLs
-(`/docs/`, `/docs/3.9.2/`, `/docs/next/`) ingests as distinct pages; top-k=8
-fills with near-identical chunks (scores 0.7457–0.7436), retrieval diversity
-collapses, install question escalated 3/3 while non-duplicated questions
-resolved first try. Fix candidates in the issue (URL version-segment dedupe /
-chunk near-dup suppression / reranking). Natural pairing: the post-publish
-reranking upgrade.
 
 ## DONE: evidence flag on the done poll — GET /result/{id}?evidence=true (closed 2026-09-07; was eng review D9 / design Approach C)
 
