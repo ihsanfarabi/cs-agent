@@ -1,0 +1,70 @@
+name: docker
+
+on:
+  pull_request:
+  push:
+    branches: [main]   # build-only on direct landings: Dockerfile rot caught here too
+    tags: ["v*"]
+
+# packages:write granted ONLY where a push can happen (tag refs); PR and
+# main-branch runs carry the default read-only token.
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      packages: ${{ startsWith(github.ref, 'refs/tags/') && 'write' || 'none' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Version guard, same as publish.yml: the image tag must equal the csproj
+      # Version. publish.yml guards the NuGet artifact in a PARALLEL job on the
+      # same tag push — without this copy, a guard failure there would still
+      # leave a public image with no matching package (outside voice, 2026-09-07).
+      - name: Version guard (tag vs CsAgent.Cli.csproj)
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          VERSION=$(grep -oPm1 '(?<=<Version>)[^<]+' src/CsAgent.Cli/CsAgent.Cli.csproj)
+          echo "tag: v$TAG  csproj Version: $VERSION"
+          if [ "$TAG" != "$VERSION" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match csproj Version $VERSION — bump the csproj or re-tag"
+            exit 1
+          fi
+
+      # No QEMU: the Dockerfile cross-compiles (FROM --platform=$BUILDPLATFORM +
+      # dotnet publish -r linux-$TARGETARCH) — the SDK never runs emulated.
+      - uses: docker/setup-buildx-action@v3
+
+      - name: GHCR login (tag pushes only)
+        uses: docker/login-action@v3
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image metadata (vX.Y.Z, X.Y.Z, latest on tag; pr-N/branch on non-tags, unused)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/ihsanfarabi/cs-agent
+
+      - name: Build (push only on tag)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          # PR/main: amd64 only (fast Dockerfile-rot check). Tag: both platforms,
+          # one buildx invocation -> one multi-arch manifest, cross-compiled natively.
+          platforms: ${{ startsWith(github.ref, 'refs/tags/') && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
+          push: ${{ startsWith(github.ref, 'refs/tags/') }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          # cache export only on single-platform runs — the multi-platform tag
+          # build's per-platform cache exports race and one is lost (buildx #1382);
+          # tag builds still RESTORE what earlier runs exported via cache-from.
+          cache-to: ${{ github.event_name == 'pull_request' && 'type=gha,mode=max' || '' }}
