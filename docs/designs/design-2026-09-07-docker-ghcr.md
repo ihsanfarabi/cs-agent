@@ -82,11 +82,12 @@ before output" HTTP surface.
 `sdk:10.0` stage restores + publishes the CLI; runtime stage is
 `mcr.microsoft.com/dotnet/aspnet:10.0` (Kestrel needs the ASP.NET runtime)
 with a non-root user, `/data` volume, `ENTRYPOINT ["/app/cs-agent"]`
-(published with `/p:AssemblyName=cs-agent` so the binary name matches the
-tool name).
+(published under natural assembly names, then the apphost is renamed to
+`/app/cs-agent` so the binary name matches the tool name).
 
-- ~120MB image; runtime patches come free with base re-pull; matches CI's
-  `dotnet-version: 10.0.x`.
+- ~276MB image; runtime patches come free with base re-pull; matches CI's
+  `dotnet-version: 10.0.x`. (An earlier draft said ~120MB — that is the
+  compressed base image, not the unpacked image.)
 - csproj files copied before `COPY . .` so restore hits the Docker layer
   cache on unchanged dependencies.
 
@@ -168,11 +169,15 @@ COPY src/CsAgent.Http/*.csproj src/CsAgent.Http/
 COPY src/CsAgent.Cli/*.csproj src/CsAgent.Cli/
 RUN dotnet restore -r linux-$TARGETARCH src/CsAgent.Cli/CsAgent.Cli.csproj
 COPY src/ src/
+# /p:AssemblyName is a global MSBuild property that would rename the
+# referenced assemblies too — publish under natural names, rename the apphost.
 RUN dotnet publish src/CsAgent.Cli/CsAgent.Cli.csproj -c Release --no-restore \
-    -r linux-$TARGETARCH --self-contained false -o /app /p:AssemblyName=cs-agent
+    -r linux-$TARGETARCH --self-contained false \
+    -o /app && mv /app/CsAgent.Cli /app/cs-agent
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0
-RUN useradd --system --create-home app && mkdir /data && chown app:app /data
+# aspnet:10.0 ships the non-root 'app' user — no useradd
+RUN mkdir /data && chown app:app /data
 WORKDIR /app
 COPY --from=build /app .
 USER app
@@ -190,6 +195,11 @@ ENTRYPOINT ["/app/cs-agent"]
 - No HEALTHCHECK directive in v1: the aspnet image ships no curl/wget.
   `GET /health` exists; orchestrators and `docker inspect`-style checks
   call it (README documents the line).
+
+(Revised 2026-09-07 as shipped: `useradd` dropped — aspnet:10.0 already
+ships the `app` user; publish + `mv` replaces `/p:AssemblyName` — it is a
+global MSBuild property and renamed the referenced Core/Http assemblies,
+breaking the build; measured image ~276MB.)
 
 ### `.github/workflows/docker.yml`
 

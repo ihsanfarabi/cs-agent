@@ -232,10 +232,10 @@ $ curl -s "http://127.0.0.1:5123/result/e2e19695…?evidence=true"
   prints a warning; auth and rate limiting wait for later work.
 
 `serve` fails fast at startup with a named structured error and exit 1 — on a
-bad port, a missing store path (checked before construction, so a refusal
-leaves no stray empty `.db` behind), a corrupt store, an embedding-model
-mismatch, or an empty store (no documents ingested). The OpenAPI document
-lives at `/openapi/v1.json`.
+bad port, a bad bind value, a missing store path (checked before
+construction, so a refusal leaves no stray empty `.db` behind), a corrupt
+store, an embedding-model mismatch, or an empty store (no documents
+ingested). The OpenAPI document lives at `/openapi/v1.json`.
 
 ## Docker
 
@@ -269,7 +269,9 @@ proxy. Named volumes
 `/data`, it is root-owned inside the container and the non-root app user
 cannot write the store — `chown` it to the container user or run with
 `--user`. There is no HEALTHCHECK directive in the image; orchestrators
-should probe `GET /health`. Job memory, restart semantics, and all other
+should probe `GET /health`. The MCP stdio server is not in the image — it
+ships separately as a .NET tool, so MCP clients never go through the
+container. Job memory, restart semantics, and all other
 HTTP limitations above apply unchanged.
 
 ## MCP server
@@ -315,7 +317,7 @@ installable product with an eval harness.
    not re-tuned).
 5. **HTTP jobs are in-process memory** — `serve` loses all job ids on
    restart (poll → 404, resubmit to recover); no eviction, TTL, or DELETE.
-   Persistence waits for the Docker/postgres work.
+   Persistence waits for the Postgres work.
 
 Deferred work: Postgres storage and
 escalation-with-actions (the escalation path gaining MAF tool-calling so a
