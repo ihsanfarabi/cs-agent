@@ -80,4 +80,36 @@ public sealed class ReproStoreTests
         Assert.True(cloneMedian - adjacentMedian >= 0.05f,
             $"gap {cloneMedian - adjacentMedian:F4} < 0.05 — λ=0.7 cannot separate clones from adjacent chunks. STOP (spec D5.1).");
     }
+
+    [ReproStoreFact]
+    public void MmrSelect_OnRealCloneVectors_ReturnsDistinctPages()
+    {
+        using var store = ReproStore.OpenStore();
+        var chunks = ReproStore.ReadChunks(ReproStore.FindDbPath()!);
+
+        // The clone hub: the family spanning the most distinct versioned page_paths.
+        var hub = chunks
+            .GroupBy(c => CloneFamilyKey(c.PagePath))
+            .OrderByDescending(g => g.GroupBy(c => c.PagePath).Count())
+            .First();
+        var hubFamily = CloneFamilyKey(hub.First().PagePath);
+        _output.WriteLine(
+            $"clone hub: family '{hubFamily}', {hub.GroupBy(c => c.PagePath).Count()} versions, {hub.Count()} chunks");
+
+        // A clone chunk's own vector as the query — no embedding call (spec D5.2).
+        var query = hub.OrderBy(c => c.Ordinal).First().Vector;
+
+        var pool = store.Pool(query);
+        var selected = Retriever.MmrSelect(query, pool, k: 8, Retriever.Lambda);
+
+        Assert.Equal(8, selected.Count);
+        var distinctPages = selected.Select(c => c.Hit.PagePath).Distinct().Count();
+        var hubClones = selected.Count(c => CloneFamilyKey(c.Hit.PagePath) == hubFamily);
+        _output.WriteLine("selected pages: " + string.Join(", ", selected.Select(c => c.Hit.PagePath)));
+
+        Assert.True(distinctPages >= 6,
+            $"only {distinctPages} distinct pages in top-8 — MMR failed on the real repro store (spec D5.2)");
+        Assert.True(hubClones <= 2,
+            $"{hubClones} clone-family chunks still in top-8 — diversity selection failed on the real repro store");
+    }
 }
