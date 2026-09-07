@@ -1,3 +1,4 @@
+using System.Net;
 using CsAgent.Core;
 using CsAgent.Http;
 using Microsoft.AspNetCore.Builder;
@@ -16,6 +17,24 @@ namespace CsAgent.Cli;
 /// </summary>
 public static class ServeRunner
 {
+    /// <summary>
+    /// Pure parse of CS_AGENT_BIND — a single IP literal. Null/whitespace defaults
+    /// to loopback (host installs keep today's behavior). Hostnames are rejected:
+    /// DNS-dependent startup is not validate-loudly. The wildcards 0.0.0.0/:: are
+    /// allowed (the container case); IPv4-mapped IPv6 normalizes to plain IPv4.
+    /// Returns the parsed IPAddress (mapped form already normalized) — one parse,
+    /// loopcheck and IPv6 bracketing read off the object.
+    /// </summary>
+    public static IPAddress ParseBind(string? raw)
+    {
+        var bind = string.IsNullOrWhiteSpace(raw) ? "127.0.0.1" : raw;
+        if (!IPAddress.TryParse(bind, out var ip))
+            throw new CsAgentException(new CsAgentError(
+                "serve", "bad-bind",
+                $"CS_AGENT_BIND must be a single IP address (not a hostname, not a subnet); got \"{raw}\"."));
+        return ip.IsIPv4MappedToIPv6 ? ip.MapToIPv4() : ip;
+    }
+
     public static int Run(string[] serveArgs, CsAgentConfig cfg)
     {
         // port: --port flag wins, then CS_AGENT_PORT, then default (both cheap — Open Question resolved)

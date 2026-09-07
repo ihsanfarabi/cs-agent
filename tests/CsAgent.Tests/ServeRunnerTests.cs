@@ -92,4 +92,42 @@ public sealed class ServeRunnerTests : IDisposable
 
         Assert.Equal("embedding-model-mismatch", ex.Error.Code);
     }
+
+    // --- CS_AGENT_BIND (ParseBind, pure — Docker/queue item 3) ---
+
+    [Fact]
+    public void ParseBind_NullOrWhitespace_DefaultsLoopback()
+    {
+        Assert.Equal("127.0.0.1", ServeRunner.ParseBind(null).ToString());
+        Assert.Equal("127.0.0.1", ServeRunner.ParseBind("").ToString());
+        Assert.Equal("127.0.0.1", ServeRunner.ParseBind("   ").ToString());
+    }
+
+    [Fact]
+    public void ParseBind_IpLiterals_Accepted()
+    {
+        Assert.Equal("192.168.1.5", ServeRunner.ParseBind("192.168.1.5").ToString());
+        Assert.Equal("::1", ServeRunner.ParseBind("::1").ToString());
+        Assert.Equal("0.0.0.0", ServeRunner.ParseBind("0.0.0.0").ToString()); // container case
+        Assert.Equal("::", ServeRunner.ParseBind("::").ToString());           // container case
+    }
+
+    [Fact]
+    public void ParseBind_Ipv4Mapped_NormalizesToIpv4()
+    {
+        Assert.Equal("127.0.0.1", ServeRunner.ParseBind("::ffff:127.0.0.1").ToString());
+    }
+
+    [Theory]
+    [InlineData("localhost")]   // hostname: DNS-dependent startup is not validate-loudly
+    [InlineData("not-an-ip")]
+    [InlineData("10.0.0.256")]  // out-of-range octet
+    [InlineData("127.0.0.1/32")] // CIDR, not a host address
+    [InlineData("http://127.0.0.1")]
+    public void ParseBind_Rejects_ThrowsBadBind(string raw)
+    {
+        var ex = Assert.Throws<CsAgentException>(() => ServeRunner.ParseBind(raw));
+        Assert.Equal("serve", ex.Error.Component);
+        Assert.Equal("bad-bind", ex.Error.Code);
+    }
 }
