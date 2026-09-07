@@ -121,36 +121,6 @@ public sealed class SqliteVectorStore : IDisposable
         return results.OrderByDescending(r => r.Hit.Score).ToList();
     }
 
-    /// <summary>Top-k chunks by cosine against the query vector.</summary>
-    public IReadOnlyList<ChunkHit> TopK(ReadOnlySpan<float> query, int k)
-    {
-        if (!HasDocuments)
-            throw new CsAgentException(new CsAgentError(
-                "store", "empty-store",
-                "No documents ingested. Run `cs-agent ingest <path>` first."));
-
-        var dim = query.Length;
-        var results = new List<(ChunkHit Hit, float[] Vector)>();
-        using (var cmd = _connection.CreateCommand())
-        {
-            cmd.CommandText = "SELECT page_path, ordinal, text, embedding FROM chunks";
-            using var reader = cmd.ExecuteReader();
-            while (reader.Read())
-            {
-                var vector = FromBlob((byte[])reader[3], dim);
-                results.Add((
-                    new ChunkHit(reader.GetString(0), reader.GetInt32(1), reader.GetString(2),
-                        VectorMath.Cosine(query, vector)),
-                    vector));
-            }
-        }
-        return results
-            .OrderByDescending(r => r.Hit.Score)
-            .Take(k)
-            .Select(r => r.Hit)
-            .ToList();
-    }
-
     public bool HasDocuments
     {
         get
