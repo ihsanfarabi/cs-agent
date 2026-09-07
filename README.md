@@ -226,14 +226,51 @@ $ curl -s "http://127.0.0.1:5123/result/e2e19695…?evidence=true"
   ignore the flag.
 - Asks run **one at a time** behind a single pipeline; concurrent submits
   queue. `GET /health` answers 200 without touching the store or a model.
-- The server binds `127.0.0.1` only — it is explicitly a no-auth,
-  no-rate-limit local tool; non-loopback bind waits for auth work.
+- The server binds `127.0.0.1` by default — it is explicitly a no-auth,
+  no-rate-limit local tool. `CS_AGENT_BIND` (a single IP address, no
+  hostnames) widens the bind for the container/reverse-proxy case and
+  prints a warning; auth and rate limiting wait for later work.
 
 `serve` fails fast at startup with a named structured error and exit 1 — on a
 bad port, a missing store path (checked before construction, so a refusal
 leaves no stray empty `.db` behind), a corrupt store, an embedding-model
 mismatch, or an empty store (no documents ingested). The OpenAPI document
 lives at `/openapi/v1.json`.
+
+## Docker
+
+The same engine ships as a container image — no .NET install, no tool path.
+The image is the full CLI: every subcommand works, and the store lives on a
+`/data` volume so ingest and serve share it across runs.
+
+```bash
+# 1. ingest (into a named volume; local docs must be mounted, URLs crawl from the container)
+docker run --rm -v cs-agent-data:/data -v "$PWD/docs:/docs:ro" \
+    -e CS_AGENT_MODEL_KEY=sk-or-... \
+    ghcr.io/ihsanfarabi/cs-agent ingest /docs
+
+# 2. serve — image bakes CS_AGENT_BIND=0.0.0.0; publishing to 127.0.0.1 keeps
+#    the host-side exposure local (the safe form — see the note below)
+docker run -d --name cs-agent -p 127.0.0.1:5123:5123 -v cs-agent-data:/data \
+    -e CS_AGENT_MODEL_KEY=sk-or-... \
+    ghcr.io/ihsanfarabi/cs-agent serve
+curl -s http://localhost:5123/health
+
+# 3. ask (same poll flow as above; add ?evidence=true to audit escalations)
+curl -s http://localhost:5123/ask -H 'Content-Type: application/json' \
+    -d '{"question": "How do I rotate the API key?"}'
+```
+
+The image binds `0.0.0.0` (container default) — it is still a no-auth,
+no-rate-limit API: the examples above publish the port to localhost only
+(`-p 127.0.0.1:5123:5123`); for anything wider, put it behind a trusted
+proxy. Named volumes
+(the examples above) just work; if you bind-mount a host directory as
+`/data`, it is root-owned inside the container and the non-root app user
+cannot write the store — `chown` it to the container user or run with
+`--user`. There is no HEALTHCHECK directive in the image; orchestrators
+should probe `GET /health`. Job memory, restart semantics, and all other
+HTTP limitations above apply unchanged.
 
 ## MCP server
 
@@ -280,7 +317,7 @@ installable product with an eval harness.
    restart (poll → 404, resubmit to recover); no eviction, TTL, or DELETE.
    Persistence waits for the Docker/postgres work.
 
-Deferred work: Docker packaging, Postgres storage, and
+Deferred work: Postgres storage and
 escalation-with-actions (the escalation path gaining MAF tool-calling so a
 "cannot answer" can open a ticket or notify a human).
 
