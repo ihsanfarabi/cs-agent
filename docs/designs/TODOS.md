@@ -1,5 +1,26 @@
 # TODOS — cs-agent
 
+## OPEN: image-hardening pass for the GHCR image (opened 2026-09-07 by /plan-eng-review on the Docker plan)
+
+**What:** follow-up hardening of `ghcr.io/ihsanfarabi/cs-agent`: cosign signing
+(+ provenance attestations), chiseled/distroless base instead of standard
+aspnet:10.0, and a HEALTHCHECK-equivalent (the aspnet base ships no
+curl/wget, so v1 ships no HEALTHCHECK directive; orchestrators probe
+`GET /health`).
+
+**Why:** v1 image is an unsigned standard-base showcase artifact — fine for
+the demo story, not for real deployment. Hardening earns its keep when
+someone deploys the image for real.
+
+**Trigger:** first report of real-world deployment, or the post-publish
+hardening sweep alongside the reranking upgrade.
+
+**Where to start:** `.github/workflows/docker.yml` (add cosign step after
+the push), `Dockerfile` (base swap; ENTRYPOINT unchanged), README
+limitiation text. Design doc `docs/designs/design-2026-09-07-docker-ghcr.md`
+"Not in scope" section lists the same items (that list goes stale; this
+entry is the living one).
+
 ## OPEN: versioned-docs URLs flood top-k with near-clone chunks (issue #6, filed 2026-09-06)
 
 Live crawl of docusaurus.io/docs: same page served at many versioned URLs

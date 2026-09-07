@@ -60,16 +60,20 @@ before output" HTTP surface.
    un-prefixed version, and `latest`. Separate file from `publish.yml` so
    `packages:write` never mixes into the NuGet OIDC job's permission
    surface.
-6. **Multi-arch via one QEMU job** (revised at plan time, 2026-09-07): a
-   single buildx build with `platforms: linux/amd64,linux/arm64` — the
-   simple, correct-manifest path. The originally sketched native-runner
-   matrix was dropped: per-platform matrix pushes do NOT merge into a
-   multi-arch manifest (the second push overwrites the tag); the correct
-   native pattern needs digest artifacts + a merge job (~40 extra lines)
-   and was judged not worth the moving parts for this repo. Cost: emulated
-   arm64 publish makes tag builds ~10-20 min; PRs build amd64-only (one
-   conditional line) so they stay ~3 min. Apple Silicon still pulls a
-   native arm64 image.
+6. **Multi-arch via one buildx job, cross-compiled** (revised twice, last
+   2026-09-07 outside-voice review): a single buildx invocation with
+   `platforms: linux/amd64,linux/arm64` produces one multi-arch manifest.
+   The Dockerfile builds from `FROM --platform=$BUILDPLATFORM sdk:10.0` with
+   `ARG TARGETARCH` feeding `-r linux-$TARGETARCH`, so the SDK stage always
+   runs natively on the amd64 runner — no QEMU, no emulated `dotnet publish`.
+   Revision history: native-runner matrix (original sketch) → dropped at
+   plan time because per-platform matrix pushes overwrite the tag manifest
+   instead of merging, and the correct native pattern needs digest
+   artifacts + a merge job (~40 lines) → QEMU single job (plan-time
+   revision) → cross-compile (outside voice D9: same one-job simplicity,
+   but the tag build drops from ~10-20 min of emulated publish to ~8-10 min
+   native). PRs build amd64-only (one conditional line) so they stay ~3
+   min. Apple Silicon still pulls a native arm64 image.
 
 ## Approaches Considered
 
@@ -101,31 +105,34 @@ both. Declined.
 
 ### ServeRunner changes (`src/CsAgent.Cli/ServeRunner.cs`)
 
-Extract a pure helper (the port parsing stays inline, matching today):
+Extract a pure helper (the port parsing stays inline, matching today).
+Signature drifted at plan time (2026-09-07, recorded here): the helper
+returns `IPAddress`, not a string, and is `public` so `Run`-level tests can
+target it directly — one `IPAddress.TryParse`, single parse, no re-parse in
+`Run`:
 
 ```csharp
 /// Pure parse of CS_AGENT_BIND — a single IP literal, hostnames rejected,
 /// wildcard allowed (container case), mapped IPv6 normalized to IPv4.
-internal static string ParseBind(string? raw)
+public static IPAddress ParseBind(string? raw)
 {
-    var bind = raw is null || string.IsNullOrWhiteSpace(raw) ? "127.0.0.1" : raw;
+    var bind = string.IsNullOrWhiteSpace(raw) ? "127.0.0.1" : raw;
     if (!IPAddress.TryParse(bind, out var ip))
         throw new CsAgentException(new CsAgentError("serve", "bad-bind",
-            $"CS_AGENT_BIND must be a single IP address (not a hostname); got \"{raw}\"."));
-    if (ip.IsIPv4MappedToIPv6) ip = ip.MapToIPv4();
-    return ip.ToString();
+            $"CS_AGENT_BIND must be a single IP address (not a hostname, not a subnet); got \"{raw}\"."));
+    return ip.IsIPv4MappedToIPv6 ? ip.MapToIPv4() : ip;
 }
 ```
 
 `Run` calls it with `Environment.GetEnvironmentVariable("CS_AGENT_BIND")`,
-then:
+catches the `CsAgentException` into the named-error print + exit 1 path
+(same as `bad-port`), then:
 
 ```csharp
-var bind = ParseBind(Environment.GetEnvironmentVariable("CS_AGENT_BIND"));
-var brackets = bind.Contains(':') ? $"[{bind}]" : bind;   // IPv6 literal needs [..] for UseUrls
-builder.WebHost.UseUrls($"http://{brackets}:{port}");
-if (!IPAddress.IsLoopback(IPAddress.Parse(bind)))
-    Console.Error.WriteLine($"warning: binding {bind} — the API is no-auth; expose only behind a trusted proxy or firewall (CS_AGENT_BIND).");
+if (!bindIp.IsLoopback())
+    Console.Error.WriteLine($"warning: binding {bindIp} — the API is no-auth and unrated; expose only behind a trusted proxy or firewall (CS_AGENT_BIND).");
+// ...
+builder.WebHost.UseUrls($"http://{brackets}:{port}");   // [..] brackets only for IPv6 literals
 ```
 
 (The listening-line message keeps its current shape with the resolved
@@ -151,15 +158,18 @@ tests/
 ```
 
 ```dockerfile
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+# --platform=$BUILDPLATFORM: build stage always runs NATIVE on the runner;
+# TARGETARCH only picks the RID the publish targets — no QEMU anywhere.
+FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+ARG TARGETARCH
 WORKDIR /src
 COPY src/CsAgent.Core/*.csproj src/CsAgent.Core/
 COPY src/CsAgent.Http/*.csproj src/CsAgent.Http/
 COPY src/CsAgent.Cli/*.csproj src/CsAgent.Cli/
-RUN dotnet restore src/CsAgent.Cli/CsAgent.Cli.csproj
+RUN dotnet restore -r linux-$TARGETARCH src/CsAgent.Cli/CsAgent.Cli.csproj
 COPY src/ src/
 RUN dotnet publish src/CsAgent.Cli/CsAgent.Cli.csproj -c Release --no-restore \
-    -o /app /p:AssemblyName=cs-agent
+    -r linux-$TARGETARCH --self-contained false -o /app /p:AssemblyName=cs-agent
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0
 RUN useradd --system --create-home app && mkdir /data && chown app:app /data
@@ -183,11 +193,16 @@ ENTRYPOINT ["/app/cs-agent"]
 
 ### `.github/workflows/docker.yml`
 
-One job, `setup-qemu-action@v3`, single buildx build with
-`platforms: linux/amd64,linux/arm64` on tag (amd64-only on PR, one
-conditional line); `docker/metadata-action@v5` tags `vX.Y.Z`, `X.Y.Z`,
-`latest`; `build-push-action@v6` with `cache-from/to: type=gha`; login and
-push only on tag refs. PR builds never log in and never push.
+One job, no QEMU step (the Dockerfile cross-compiles). Single buildx build
+with `platforms: linux/amd64,linux/arm64` on tag (amd64-only on PR and
+direct pushes to main, one conditional line); `docker/metadata-action@v5`
+tags `vX.Y.Z`, `X.Y.Z`, `latest`; `build-push-action@v6` with
+`cache-from: type=gha` and `cache-to` only on PRs (multi-platform GHA cache
+export is a known buildx race, buildx #1382); login and push only on tag
+refs, with `permissions: packages: write` scoped to tag refs (none
+otherwise) and a 15-minute timeout. Because `docker.yml` runs in parallel
+with `publish.yml` on a tag push, it carries its own tag == csproj
+`Version` guard. PR/main builds never log in and never push.
 
 ### README
 
@@ -211,8 +226,8 @@ push only on tag refs. PR builds never log in and never push.
   `fixtures/` into a named volume and curl `/health` + one `/ask` through
   `-p`. Verifies bind, volume ownership (non-root), store path, and that
   no stray `.db` lands anywhere but `/data`.
-- **CI**: PR shows both platform builds green; first tag push shows the
-  multi-arch manifest on ghcr.io and a pullable `latest`.
+- **CI**: PR shows the amd64 build green; first tag push shows the
+  multi-arch manifest (amd64 + arm64) on ghcr.io and a pullable `latest`.
 - No Core changes → eval gates and the 119-test suite are untouched except
   for the new ServeRunner tests.
 

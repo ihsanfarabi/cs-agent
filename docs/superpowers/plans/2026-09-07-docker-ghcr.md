@@ -4,9 +4,9 @@
 
 **Goal:** Ship `ghcr.io/ihsanfarabi/cs-agent` as a multi-arch container image running the full CLI (ingest + serve) against a `/data` volume, plus the `CS_AGENT_BIND` env var that makes `serve` bindable outside loopback.
 
-**Architecture:** One CLI change (bind parse + non-loopback warning in `ServeRunner`, zero Core changes), one multi-stage Dockerfile (framework-dependent publish of `CsAgent.Cli` onto the aspnet:10.0 runtime, non-root user), one new workflow (`docker.yml`: PR build-only amd64, tag push amd64+arm64 via QEMU buildx), README Docker section.
+**Architecture:** One CLI change (bind parse + non-loopback warning in `ServeRunner`, zero Core changes), one multi-stage Dockerfile (framework-dependent publish of `CsAgent.Cli` onto the aspnet:10.0 runtime, non-root user; cross-compiled via `FROM --platform=$BUILDPLATFORM` + `ARG TARGETARCH` so the SDK always runs natively — no QEMU), one new workflow (`docker.yml`: PR + main build-only amd64, tag push amd64+arm64 as a single multi-arch manifest, own version guard, scoped `packages: write`), README Docker section.
 
-**Tech Stack:** .NET 10 (SDK/aspnet base images), Docker buildx + QEMU, GitHub Actions (docker/build-push-action@v6, metadata-action@v5, login-action@v3), xUnit.
+**Tech Stack:** .NET 10 (SDK/aspnet base images), Docker buildx cross-compile (`$BUILDPLATFORM`/`TARGETARCH`), GitHub Actions (docker/build-push-action@v6, metadata-action@v5, login-action@v3), xUnit.
 
 **Spec:** `docs/designs/design-2026-09-07-docker-ghcr.md` — the plan argues from the spec; read both.
 
@@ -30,7 +30,7 @@
 
 **Interfaces:**
 - Consumes: `CsAgentException`, `CsAgentError` (existing, `CsAgent.Core`).
-- Produces: `public static string ServeRunner.ParseBind(string? raw)` — null/whitespace → `"127.0.0.1"`; single IP literal accepted (IPv4, IPv6 incl. wildcard `::`/`0.0.0.0`); IPv4-mapped IPv6 normalized to plain IPv4; anything else (hostnames, garbage, subnet notation) throws `CsAgentException` with `Error.Component == "serve"`, `Error.Code == "bad-bind"`. Task 2 wires it into `Run`.
+- Produces: `public static IPAddress ServeRunner.ParseBind(string? raw)` — null/whitespace → loopback; single IP literal accepted (IPv4, IPv6 incl. wildcard `::`/`0.0.0.0`); IPv4-mapped IPv6 normalized to plain IPv4; anything else (hostnames, garbage, subnet notation) throws `CsAgentException` with `Error.Component == "serve"`, `Error.Code == "bad-bind"`. Task 2 wires it into `Run`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -42,24 +42,24 @@ Append to `ServeRunnerTests` (after the existing `EmbeddingModelMismatch_Throws`
     [Fact]
     public void ParseBind_NullOrWhitespace_DefaultsLoopback()
     {
-        Assert.Equal("127.0.0.1", ServeRunner.ParseBind(null));
-        Assert.Equal("127.0.0.1", ServeRunner.ParseBind(""));
-        Assert.Equal("127.0.0.1", ServeRunner.ParseBind("   "));
+        Assert.Equal("127.0.0.1", ServeRunner.ParseBind(null).ToString());
+        Assert.Equal("127.0.0.1", ServeRunner.ParseBind("").ToString());
+        Assert.Equal("127.0.0.1", ServeRunner.ParseBind("   ").ToString());
     }
 
     [Fact]
     public void ParseBind_IpLiterals_Accepted()
     {
-        Assert.Equal("192.168.1.5", ServeRunner.ParseBind("192.168.1.5"));
-        Assert.Equal("::1", ServeRunner.ParseBind("::1"));
-        Assert.Equal("0.0.0.0", ServeRunner.ParseBind("0.0.0.0")); // container case
-        Assert.Equal("::", ServeRunner.ParseBind("::"));           // container case
+        Assert.Equal("192.168.1.5", ServeRunner.ParseBind("192.168.1.5").ToString());
+        Assert.Equal("::1", ServeRunner.ParseBind("::1").ToString());
+        Assert.Equal("0.0.0.0", ServeRunner.ParseBind("0.0.0.0").ToString()); // container case
+        Assert.Equal("::", ServeRunner.ParseBind("::").ToString());           // container case
     }
 
     [Fact]
     public void ParseBind_Ipv4Mapped_NormalizesToIpv4()
     {
-        Assert.Equal("127.0.0.1", ServeRunner.ParseBind("::ffff:127.0.0.1"));
+        Assert.Equal("127.0.0.1", ServeRunner.ParseBind("::ffff:127.0.0.1").ToString());
     }
 
     [Theory]
@@ -91,16 +91,17 @@ In `src/CsAgent.Cli/ServeRunner.cs`, add `using System.Net;` at the top and this
     /// to loopback (host installs keep today's behavior). Hostnames are rejected:
     /// DNS-dependent startup is not validate-loudly. The wildcards 0.0.0.0/:: are
     /// allowed (the container case); IPv4-mapped IPv6 normalizes to plain IPv4.
+    /// Returns the parsed IPAddress (mapped form already normalized) — one parse,
+    /// loopcheck and IPv6 bracketing read off the object.
     /// </summary>
-    public static string ParseBind(string? raw)
+    public static IPAddress ParseBind(string? raw)
     {
         var bind = string.IsNullOrWhiteSpace(raw) ? "127.0.0.1" : raw;
         if (!IPAddress.TryParse(bind, out var ip))
             throw new CsAgentException(new CsAgentError(
                 "serve", "bad-bind",
                 $"CS_AGENT_BIND must be a single IP address (not a hostname, not a subnet); got \"{raw}\"."));
-        if (ip.IsIPv4MappedToIPv6) ip = ip.MapToIPv4();
-        return ip.ToString();
+        return ip.IsIPv4MappedToIPv6 ? ip.MapToIPv4() : ip;
     }
 ```
 
@@ -135,33 +136,82 @@ git commit -m "feat: ParseBind helper for CS_AGENT_BIND"
 - Consumes: `ServeRunner.ParseBind(string? raw)` from Task 1 (exact signature above).
 - Produces: `serve` behavior — env `CS_AGENT_BIND` honored; `http://{bind}:{port}` URL (IPv6 bracketed); non-loopback bind prints one stderr warning; bad value → error printed, return 1. Task 3's Dockerfile relies on `CS_AGENT_BIND=0.0.0.0` actually binding all interfaces.
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the failing tests**
 
-Append to `ServeRunnerTests`:
+Append to `ServeRunnerTests`. The `WithServeEnv` helper pins BOTH vars `Run`
+reads straight from the process environment — `CS_AGENT_BIND` (the behavior
+under test) and `CS_AGENT_PORT` (a garbage value on the host box would
+otherwise fail at bad-port before the bind code is reached, a heisenbug on
+odd machines; outside voice 2026-09-07).
 
 ```csharp
+    private static void WithServeEnv(string? bind, Action act)
+    {
+        var prevBind = Environment.GetEnvironmentVariable("CS_AGENT_BIND");
+        var prevPort = Environment.GetEnvironmentVariable("CS_AGENT_PORT");
+        Environment.SetEnvironmentVariable("CS_AGENT_BIND", bind);
+        Environment.SetEnvironmentVariable("CS_AGENT_PORT", null);
+        try { act(); }
+        finally
+        {
+            Environment.SetEnvironmentVariable("CS_AGENT_BIND", prevBind);
+            Environment.SetEnvironmentVariable("CS_AGENT_PORT", prevPort);
+        }
+    }
+
     [Fact]
     public void BadBindEnv_Returns1_NoStoreTouched()
     {
         // bind is validated BEFORE the store checks (bad-port idiom): this config
         // points at a missing store, so reaching store-missing would prove wrong order
-        var prev = Environment.GetEnvironmentVariable("CS_AGENT_BIND");
-        Environment.SetEnvironmentVariable("CS_AGENT_BIND", "localhost");
+        WithServeEnv("localhost", () => Assert.Equal(1, ServeRunner.Run(["serve"], Config())));
+    }
+
+    // Warning is a SAFETY line (no-auth API now reachable): both directions live
+    // in the suite, not only the one-off container smoke. It must print right
+    // after the bind parse — BEFORE the store checks — so it lands in docker logs
+    // even when a store error follows.
+    [Fact]
+    public void NonLoopbackBind_PrintsWarning_BeforeStoreChecks()
+    {
+        var origErr = Console.Error;
+        using var captured = new StringWriter();
+        Console.SetError(captured);
         try
         {
-            Assert.Equal(1, ServeRunner.Run(["serve"], Config()));
+            // missing store: throws AFTER the warning should have printed
+            WithServeEnv("0.0.0.0",
+                () => Assert.Throws<CsAgentException>(() => ServeRunner.Run(["serve"], Config())));
         }
-        finally
+        finally { Console.SetError(origErr); }
+        Assert.Contains("warning: binding 0.0.0.0", captured.ToString());
+    }
+
+    [Fact]
+    public void LoopbackDefault_NoWarning()
+    {
+        var origErr = Console.Error;
+        using var captured = new StringWriter();
+        Console.SetError(captured);
+        try
         {
-            Environment.SetEnvironmentVariable("CS_AGENT_BIND", prev);
+            WithServeEnv(null,
+                () => Assert.Throws<CsAgentException>(() => ServeRunner.Run(["serve"], Config())));
         }
+        finally { Console.SetError(origErr); }
+        Assert.DoesNotContain("warning: binding", captured.ToString());
     }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+xUnit note: test classes run in parallel; the `Console.SetError` capture
+window is short and these are the only tests emitting serve stderr, but if
+the suite ever grows other stderr-writing tests, isolate these three in
+their own collection.
 
-Run: `dotnet test tests/CsAgent.Tests -c Release --filter "FullyQualifiedName~BadBindEnv"`
-Expected: FAIL — throws `CsAgentException` (`store-missing`) instead of returning 1, because `Run` does not read `CS_AGENT_BIND` yet. (If it fails with a different error, stop and re-read the current `Run` before editing.)
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `dotnet test tests/CsAgent.Tests -c Release --filter "FullyQualifiedName~BadBindEnv|FullyQualifiedName~Warning"`
+Expected: FAIL — `BadBindEnv` throws `CsAgentException` (`store-missing`) instead of returning 1; the two warning tests find no warning text, because `Run` does not read `CS_AGENT_BIND` yet. (If a test fails with a different error, stop and re-read the current `Run` before editing.)
 
 - [ ] **Step 3: Wire the bind into Run**
 
@@ -169,25 +219,28 @@ In `ServeRunner.Run`, after the port validation block (`rawPort ??= …` through
 
 ```csharp
         // bind: CS_AGENT_BIND, default loopback (host installs unchanged); validated
-        // BEFORE the store checks, same fail-fast shape as the port above
-        string bind;
+        // BEFORE the store checks, same fail-fast shape as the port above. The
+        // non-loopback warning prints HERE (before store checks) so it reaches
+        // docker logs even when a store error follows.
+        IPAddress bindIp;
         try
         {
-            bind = ParseBind(Environment.GetEnvironmentVariable("CS_AGENT_BIND"));
+            bindIp = ParseBind(Environment.GetEnvironmentVariable("CS_AGENT_BIND"));
         }
         catch (CsAgentException ex)
         {
             Console.Error.WriteLine(ex.Error);
             return 1;
         }
+        if (!bindIp.IsLoopback())
+            Console.Error.WriteLine($"warning: binding {bindIp} — the API is no-auth and unrated; expose only behind a trusted proxy or firewall (CS_AGENT_BIND).");
 ```
 
 Then replace the two lines `builder.WebHost.UseUrls($"http://127.0.0.1:{port}"); // loopback-only bind — explicitly no-auth API` and the listening-line `Console.WriteLine($"listening on http://127.0.0.1:{port} — …")` with:
 
 ```csharp
-        var brackets = bind.Contains(':') ? $"[{bind}]" : bind; // UseUrls requires [..] around IPv6 literals
-        if (!IPAddress.IsLoopback(IPAddress.Parse(bind)))
-            Console.Error.WriteLine($"warning: binding {bind} — the API is no-auth and unrated; expose only behind a trusted proxy or firewall (CS_AGENT_BIND).");
+        var bind = bindIp.ToString();
+        var brackets = bindIp.AddressFamily == AddressFamily.InterNetworkV6 ? $"[{bind}]" : bind; // UseUrls requires [..] around IPv6 literals
         builder.WebHost.UseUrls($"http://{brackets}:{port}"); // loopback by default; CS_AGENT_BIND widens (container/proxy case)
 ```
 
@@ -197,15 +250,17 @@ and
         Console.WriteLine($"listening on http://{brackets}:{port} — POST /ask · GET /result/{{id}} · GET /health · /openapi/v1.json");
 ```
 
+(`using System.Net.Sockets;` joins `using System.Net;` at the top for `AddressFamily`.)
+
 Keep everything else in `Run` byte-identical (store fail-fast, pipeline creation, Kestrel options, `AddressInUseException` catch).
 
-- [ ] **Step 4: Run the new test, then the full suite**
+- [ ] **Step 4: Run the new tests, then the full suite**
 
-Run: `dotnet test tests/CsAgent.Tests -c Release --filter "FullyQualifiedName~BadBindEnv"`
-Expected: PASS (returns 1, no exception).
+Run: `dotnet test tests/CsAgent.Tests -c Release --filter "FullyQualifiedName~BadBindEnv|FullyQualifiedName~Warning"`
+Expected: PASS (returns 1, no exception; warning present on 0.0.0.0, absent on default).
 
 Run: `dotnet test -c Release`
-Expected: 128 passing, 0 failing (127 from Task 1 + this one).
+Expected: 130 passing, 0 failing (127 from Task 1 + these three).
 
 - [ ] **Step 5: Manual sanity (optional, 1 min, no Docker yet)**
 
@@ -252,17 +307,26 @@ tests/
 
 - [ ] **Step 2: Write `Dockerfile`**
 
+Cross-compile shape (eng review + outside voice, 2026-09-07): the build stage
+runs on the BUILDER's native platform (`--platform=$BUILDPLATFORM`) and
+targets the wanted runtime via RID — the SDK never executes under QEMU
+emulation (known flake source: SIGSEGV/OOM/hangs; also 8x slower). Microsoft's
+documented pattern for QEMU-free multi-arch .NET images.
+
 ```dockerfile
-# Multi-stage, framework-dependent (design-2026-09-07-docker-ghcr.md, Approach A).
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+# Multi-stage, framework-dependent, cross-compiled (design-2026-09-07-docker-ghcr.md Approach A,
+# revised per eng review: SDK runs native, TARGETARCH picks the RID — no QEMU).
+FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+ARG TARGETARCH
 WORKDIR /src
 # csproj layer first: restore hits the Docker layer cache on unchanged deps
 COPY src/CsAgent.Core/*.csproj src/CsAgent.Core/
 COPY src/CsAgent.Http/*.csproj src/CsAgent.Http/
 COPY src/CsAgent.Cli/*.csproj src/CsAgent.Cli/
-RUN dotnet restore src/CsAgent.Cli/CsAgent.Cli.csproj
+RUN dotnet restore -r linux-$TARGETARCH src/CsAgent.Cli/CsAgent.Cli.csproj
 COPY src/ src/
 RUN dotnet publish src/CsAgent.Cli/CsAgent.Cli.csproj -c Release --no-restore \
+    -r linux-$TARGETARCH --self-contained false \
     -o /app /p:AssemblyName=cs-agent
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0
@@ -278,6 +342,16 @@ VOLUME /data
 EXPOSE 5123
 ENTRYPOINT ["/app/cs-agent"]
 ```
+
+Notes for the implementer:
+- `dotnet restore -r` before publish is required for RID-specific
+  framework-dependent publish (restore resolves the per-RID assets).
+- `-r linux-$TARGETARCH --self-contained false` = framework-dependent but
+  RID-specific: output includes a platform-matching apphost; the aspnet:10.0
+  base (a multi-arch manifest) supplies the correct runtime per platform.
+- Single `-o /app` is fine — each platform builds its own stage instance;
+  the runtime stage's `COPY --from=build /app .` picks up its own platform's
+  output.
 
 - [ ] **Step 3: Verify Docker is up, then build**
 
@@ -306,7 +380,7 @@ git commit -m "feat: Dockerfile — full CLI on aspnet:10.0, /data volume, non-r
 
 **Interfaces:**
 - Consumes: `Dockerfile` from Task 3 (same build context, same file).
-- Produces: on every PR — an amd64 build of the Dockerfile (never pushed); on tag `v*` — `ghcr.io/ihsanfarabi/cs-agent` pushed with tags `vX.Y.Z`, `X.Y.Z`, `latest` as ONE multi-arch manifest (amd64+arm64, QEMU). Version consistency rides on `publish.yml`'s existing tag==csproj guard on the same tag push; no second guard here.
+- Produces: on every PR and on direct pushes to main — an amd64 build of the Dockerfile (never pushed, read-only token); on tag `v*` — `ghcr.io/ihsanfarabi/cs-agent` pushed with tags `vX.Y.Z`, `X.Y.Z`, `latest` as ONE multi-arch manifest (amd64 + arm64, both cross-compiled natively — no QEMU). Tag runs carry their own copy of publish.yml's version guard, so a csproj/tag mismatch fails the image push independently of the NuGet job.
 
 - [ ] **Step 1: Write the workflow**
 
@@ -316,24 +390,43 @@ name: docker
 on:
   pull_request:
   push:
+    branches: [main]   # build-only on direct landings: Dockerfile rot caught here too
     tags: ["v*"]
 
+# packages:write granted ONLY where a push can happen (tag refs); PR and
+# main-branch runs carry the default read-only token.
 permissions:
-  packages: write
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 40 # QEMU arm64 publish is slow (~10-20 min); PR builds finish in ~3
+    timeout-minutes: 15
+    permissions:
+      packages: ${{ startsWith(github.ref, 'refs/tags/') && 'write' || 'none' }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up QEMU (arm64 emulation for the tag build)
-        uses: docker/setup-qemu-action@v3
+      # Version guard, same as publish.yml: the image tag must equal the csproj
+      # Version. publish.yml guards the NuGet artifact in a PARALLEL job on the
+      # same tag push — without this copy, a guard failure there would still
+      # leave a public image with no matching package (outside voice, 2026-09-07).
+      - name: Version guard (tag vs CsAgent.Cli.csproj)
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          VERSION=$(grep -oPm1 '(?<=<Version>)[^<]+' src/CsAgent.Cli/CsAgent.Cli.csproj)
+          echo "tag: v$TAG  csproj Version: $VERSION"
+          if [ "$TAG" != "$VERSION" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match csproj Version $VERSION — bump the csproj or re-tag"
+            exit 1
+          fi
 
+      # No QEMU: the Dockerfile cross-compiles (FROM --platform=$BUILDPLATFORM +
+      # dotnet publish -r linux-$TARGETARCH) — the SDK never runs emulated.
       - uses: docker/setup-buildx-action@v3
 
-      - name: GHCR login (tag pushes only — PRs never authenticate)
+      - name: GHCR login (tag pushes only)
         uses: docker/login-action@v3
         if: startsWith(github.ref, 'refs/tags/')
         with:
@@ -341,7 +434,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Image metadata (vX.Y.Z, X.Y.Z, latest on tag; pr-N on PR, unused)
+      - name: Image metadata (vX.Y.Z, X.Y.Z, latest on tag; pr-N/branch on non-tags, unused)
         id: meta
         uses: docker/metadata-action@v5
         with:
@@ -351,14 +444,17 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          # PR: amd64 only (fast Dockerfile-rot check). Tag: both platforms,
-          # one buildx invocation -> one multi-arch manifest.
+          # PR/main: amd64 only (fast Dockerfile-rot check). Tag: both platforms,
+          # one buildx invocation -> one multi-arch manifest, cross-compiled natively.
           platforms: ${{ startsWith(github.ref, 'refs/tags/') && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
           push: ${{ startsWith(github.ref, 'refs/tags/') }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # cache export only on single-platform runs — the multi-platform tag
+          # build's per-platform cache exports race and one is lost (buildx #1382);
+          # tag builds still RESTORE what earlier runs exported via cache-from.
+          cache-to: ${{ github.event_name == 'pull_request' && 'type=gha,mode=max' || '' }}
 ```
 
 - [ ] **Step 2: YAML sanity check (local, no push)**
@@ -421,8 +517,9 @@ docker run --rm -v cs-agent-data:/data -v "$PWD/docs:/docs:ro" \
     -e CS_AGENT_MODEL_KEY=sk-or-... \
     ghcr.io/ihsanfarabi/cs-agent ingest /docs
 
-# 2. serve — image bakes CS_AGENT_BIND=0.0.0.0, so -p works
-docker run -d --name cs-agent -p 5123:5123 -v cs-agent-data:/data \
+# 2. serve — image bakes CS_AGENT_BIND=0.0.0.0; publishing to 127.0.0.1 keeps
+#    the host-side exposure local (the safe form — see the note below)
+docker run -d --name cs-agent -p 127.0.0.1:5123:5123 -v cs-agent-data:/data \
     -e CS_AGENT_MODEL_KEY=sk-or-... \
     ghcr.io/ihsanfarabi/cs-agent serve
 curl -s http://localhost:5123/health
@@ -433,11 +530,15 @@ curl -s http://localhost:5123/ask -H 'Content-Type: application/json' \
 ```
 
 The image binds `0.0.0.0` (container default) — it is still a no-auth,
-no-rate-limit API: publish the port to localhost only
-(`-p 127.0.0.1:5123:5123`) or put it behind a trusted proxy. There is no
-HEALTHCHECK directive in the image; orchestrators should probe
-`GET /health`. Job memory, restart semantics, and all other HTTP limitations
-above apply unchanged.
+no-rate-limit API: the examples above publish the port to localhost only
+(`-p 127.0.0.1:5123:5123`); for anything wider, put it behind a trusted
+proxy. Named volumes
+(the examples above) just work; if you bind-mount a host directory as
+`/data`, it is root-owned inside the container and the non-root app user
+cannot write the store — `chown` it to the container user or run with
+`--user`. There is no HEALTHCHECK directive in the image; orchestrators
+should probe `GET /health`. Job memory, restart semantics, and all other
+HTTP limitations above apply unchanged.
 ```
 
 (Nested code fences: the outer block above is illustrative — in the actual README the two shell blocks are ordinary fenced blocks, not nested.)
@@ -485,7 +586,7 @@ Expected: ingest output naming the store at `/data/cs-agent.db`, zero structured
 - [ ] **Step 3: Serve on a published port**
 
 ```bash
-docker run -d --name cs-agent-smoke -p 5123:5123 -v cs-agent-smoke:/data \
+docker run -d --name cs-agent-smoke -p 127.0.0.1:5123:5123 -v cs-agent-smoke:/data \
     -e CS_AGENT_MODEL_KEY="$CS_AGENT_MODEL_KEY" \
     cs-agent:dev serve
 ```
@@ -518,19 +619,24 @@ Prepend to the OPEN section of `docs/designs/TODOS.md` (above the current OPEN i
 **What shipped:** multi-stage Dockerfile (framework-dependent CLI publish onto
 aspnet:10.0, non-root `app` user, `/data` volume, `CS_AGENT_BIND=0.0.0.0` +
 `CS_AGENT_STORE=/data/cs-agent.db` baked in) + `.github/workflows/docker.yml`
-(PR: amd64 build-only, never pushes; tag v*: one QEMU buildx build pushing
+(PR + main push: amd64 build-only, never pushes, read-only token; tag v*: one
+buildx build cross-compiled from the native SDK stage — no QEMU — pushing
 `ghcr.io/ihsanfarabi/cs-agent` as a single multi-arch manifest with `vX.Y.Z`,
-`X.Y.Z`, `latest`). Core change: one — `ServeRunner` gained `ParseBind`
-(`CS_AGENT_BIND`, default loopback, hostnames rejected, wildcard allowed,
-IPv6 bracketed for UseUrls) plus the non-loopback stderr warning; bad value
-is named error `serve/bad-bind`, exit 1, before any socket or store open.
+`X.Y.Z`, `latest`; own tag==csproj-version guard, `packages: write` scoped to
+tag refs only, 15-min timeout). Core change: one — `ServeRunner` gained
+`ParseBind` (`CS_AGENT_BIND`, default loopback, hostnames rejected, wildcard
+allowed, IPv6 bracketed for UseUrls) plus the non-loopback stderr warning; bad
+value is named error `serve/bad-bind`, exit 1, before any socket or store open.
 Zero Core pipeline changes; eval gates untouched. Tests: 8 ParseBind cases +
-1 Run fail-fast added (128 total, all green). The image is the full CLI —
+3 Run tests added (fail-fast ordering + both warning directions, port-pinned
+env hygiene; 130 total, all green). The image is the full CLI —
 ingest and serve share the `/data` volume; MCP stays a NuGet tool (not in the
 image, documented). Workflow note: the originally sketched native-runner
-matrix was replaced by a single QEMU job at plan time — per-platform matrix
-pushes overwrite the tag manifest instead of merging; design doc premise 6
-records the revision.
+matrix was replaced by QEMU at plan time (per-platform matrix pushes overwrite
+the tag manifest instead of merging), then QEMU was replaced by the
+cross-compile pattern per outside-voice review (D9) — SDK runs native on
+`$BUILDPLATFORM`, `TARGETARCH` picks the RID; design doc premise 6 records
+both revisions.
 ```
 
 - [ ] **Step 7: Commit**
@@ -548,15 +654,68 @@ and the NuGet publish) is the user's call, not this plan's — do not tag.
 
 ---
 
-## Plan Self-Review (done at write time)
+## Plan Self-Review (done at write time, revised after eng + outside-voice review 2026-09-07)
 
 - Spec coverage: premises 1-6 → Tasks 1-4; README → Task 5; testing section
   (unit, local smoke, CI) → Tasks 1-2, 6, 4; success criteria → Task 6 +
   live tag run. Not-in-scope items have no tasks, correctly.
 - Multi-arch correctness: single buildx invocation with both platforms is
-  what produces one manifest — no digest-merge needed; PR/amd64-only keeps
-  PR time ~3 min.
+  what produces one manifest — no digest-merge needed. Both platforms
+  cross-compile from the native SDK stage (`FROM --platform=$BUILDPLATFORM`,
+  `TARGETARCH` → RID), so no QEMU and no emulated publish; PR/main builds
+  stay amd64-only (~3 min), tag builds ~8-10 min.
 - Ordering: bind parse sits before store checks in `Run` (Task 2 test
   enforces this by pointing at a missing store).
-- Deviation from design doc premise 6 (native matrix → QEMU) was recorded
-  in the design doc before this plan was written.
+- Deviation from design doc premise 6 (native matrix → QEMU →
+  cross-compile) was recorded in the design doc at each revision.
+## Implementation Tasks
+
+| # | Task | Files | Tests |
+|---|------|-------|-------|
+| 1 | `ParseBind` pure helper | `src/CsAgent.Cli/ServeRunner.cs`, `tests/CsAgent.Tests/ServeRunnerTests.cs` | 8 cases (TDD) |
+| 2 | Wire bind into `Run` | `src/CsAgent.Cli/ServeRunner.cs`, `tests/CsAgent.Tests/ServeRunnerTests.cs` | 3 tests (ordering + warnings, env-pinned) |
+| 3 | `.dockerignore` + Dockerfile + local build | `.dockerignore`, `Dockerfile` | local amd64 build + usage/serve smoke |
+| 4 | `docker.yml` workflow | `.github/workflows/docker.yml` | workflow lint (yamllint), version-guard dry run |
+| 5 | README Docker section + limitation rewrite | `README.md` | read-through vs shipped flags |
+| 6 | Local e2e container verify + TODOS DONE | `docs/designs/TODOS.md` | ingest → serve → /health → /ask through `-p` |
+
+Parallelization: Lane A (T1 → T2) and Lane B (T3 → T4) are independent; T5
+after both; T6 last. Total added tests: 11 (119 → 130).
+
+## GSTACK REVIEW REPORT
+
+- **Runs:** gstack-plan-eng-review FULL_REVIEW (4 sections: Architecture,
+  Code Quality, Tests, Performance) + outside voice (Claude subagent,
+  Codex absent) + cross-model tension pass, 2026-09-07.
+- **Status:** CLEARED — all findings resolved; every decision (D1-D12)
+  chose a recommended or explicit user option; no open items.
+- **Findings:**
+
+| # | Source | Finding | Resolution |
+|---|--------|---------|------------|
+| 1 | Eng/Perf | `cache-to: type=gha` on multi-platform build loses one platform's cache (buildx #1382 race) | Conditional cache-to: PR only (D1A) |
+| 2 | Eng/Architecture | Bind-mount `/data` is root-owned on first use; container ingest fails confusingly | README chown note + smoke verifies (D2A) |
+| 3 | Eng/Code Quality | Spec `ParseBind` returned string; `Run` re-parsed it | Return `IPAddress`, single parse (D3A) |
+| 4 | Eng/Tests | Non-loopback warning untested at unit level | Both warning directions added (D4A) |
+| 5 | Eng/Perf | No workflow timeout; hung buildx burns runner minutes | `timeout-minutes: 15` (D5A) |
+| 6 | Outside | Image hardening absent (cosign, chiseled, HEALTHCHECK) | TODOS OPEN entry, real-deployment trigger (D6A) |
+| 7 | Outside | README `-p 5123:5123` example contradicted its own safety caveat | `-p 127.0.0.1:5123:5123` everywhere (D7A) |
+| 8 | Outside | docker.yml and publish.yml race on tag push; no version guard in docker.yml | Own tag==csproj guard copied in (D8A) |
+| 9 | Outside | QEMU emulated arm64 publish = 10-20 min tag builds | Cross-compile (`$BUILDPLATFORM` + `TARGETARCH`), no QEMU (D9A) |
+| 10 | Outside | Baked `0.0.0.0` questioned vs requiring explicit `-e` | Kept baked — one-line `docker run` is the demo (D10A) |
+| 11 | Outside | Workflow trigger + permission scope | main-branch build-only added; `packages: write` scoped to tag refs (D11A) |
+| 12 | Outside | Env-mutating tests could hit a stale `CS_AGENT_PORT` on odd machines | `WithServeEnv` pins both vars (D12A) |
+
+- **Coverage:** 12 review surfaces checked; 9 unit-testable (all covered
+  after D4/D12), 3 live-only by nature (image pull, GHCR push, NuGet/image
+  version match on tag) — covered by the smoke and the first tag run.
+- **Lake Score:** 11/11 decisions chose the complete option; no accepted
+  shortcuts, no `gstack-shortcut` markers owed.
+- **Spec reconciliation:** design doc premise 6 revision history, the
+  ParseBind signature drift (`public IPAddress`), Dockerfile/docker.yml
+  cross-compile shapes, and the PR-amd64-only CI line were all written back
+  into `docs/designs/design-2026-09-07-docker-ghcr.md`.
+
+VERDICT: CLEARED — plan is execution-ready; unresolved decisions: none.
+
+NO UNRESOLVED DECISIONS
