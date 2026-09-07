@@ -60,9 +60,16 @@ before output" HTTP surface.
    un-prefixed version, and `latest`. Separate file from `publish.yml` so
    `packages:write` never mixes into the NuGet OIDC job's permission
    surface.
-6. **Multi-arch, native runners**: matrix `ubuntu-latest` (amd64) +
-   `ubuntu-24.04-arm` (arm64) — free on public repos, no QEMU, and the
-   maintainer's Apple Silicon pulls a native image.
+6. **Multi-arch via one QEMU job** (revised at plan time, 2026-09-07): a
+   single buildx build with `platforms: linux/amd64,linux/arm64` — the
+   simple, correct-manifest path. The originally sketched native-runner
+   matrix was dropped: per-platform matrix pushes do NOT merge into a
+   multi-arch manifest (the second push overwrites the tag); the correct
+   native pattern needs digest artifacts + a merge job (~40 extra lines)
+   and was judged not worth the moving parts for this repo. Cost: emulated
+   arm64 publish makes tag builds ~10-20 min; PRs build amd64-only (one
+   conditional line) so they stay ~3 min. Apple Silicon still pulls a
+   native arm64 image.
 
 ## Approaches Considered
 
@@ -176,10 +183,11 @@ ENTRYPOINT ["/app/cs-agent"]
 
 ### `.github/workflows/docker.yml`
 
-As presented and approved in session (PR build-only matrix + tag push with
-`docker/metadata-action@v5` tags `vX.Y.Z`, `X.Y.Z`, `latest`;
-`build-push-action@v6` with `cache-from/to: type=gha`; login only on tag
-refs). PR tags are `pr-N` labels but never pushed.
+One job, `setup-qemu-action@v3`, single buildx build with
+`platforms: linux/amd64,linux/arm64` on tag (amd64-only on PR, one
+conditional line); `docker/metadata-action@v5` tags `vX.Y.Z`, `X.Y.Z`,
+`latest`; `build-push-action@v6` with `cache-from/to: type=gha`; login and
+push only on tag refs. PR builds never log in and never push.
 
 ### README
 
