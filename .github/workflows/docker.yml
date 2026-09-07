@@ -16,6 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
+      contents: read
       packages: ${{ startsWith(github.ref, 'refs/tags/') && 'write' || 'none' }}
     steps:
       - uses: actions/checkout@v4
@@ -64,7 +65,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
-          # cache export only on single-platform runs — the multi-platform tag
-          # build's per-platform cache exports race and one is lost (buildx #1382);
-          # tag builds still RESTORE what earlier runs exported via cache-from.
+          # cache export only on PR runs — single-platform, while the multi-platform
+          # tag build's per-platform cache exports race and one is lost (buildx #1382);
+          # main-push builds still RESTORE via cache-from.
           cache-to: ${{ github.event_name == 'pull_request' && 'type=gha,mode=max' || '' }}
