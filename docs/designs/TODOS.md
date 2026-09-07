@@ -10,26 +10,28 @@ resolved first try. Fix candidates in the issue (URL version-segment dedupe /
 chunk near-dup suppression / reranking). Natural pairing: the post-publish
 reranking upgrade.
 
-## OPEN: evidence flag on POST /ask — `?evidence=true` trace bundle (deferred 2026-09-07, HTTP-API eng review D9)
+## DONE: evidence flag on the done poll — GET /result/{id}?evidence=true (closed 2026-09-07; was eng review D9 / design Approach C)
 
-**What:** optional `?evidence=true` trace bundle: retrieved chunks, raw
-verifier claims JSON, per-claim support — rejected-draft content clearly
-labeled gated. (Contract re-shaped after the 202 upgrade: POST /ask returns
-202 immediately, so the bundle rides GET /result/{id}, e.g.
-`/result/{id}?evidence=true` on the done poll.)
+**What shipped:** optional `?evidence=true` on the done poll returns
+`{ result, evidence }` — the canonical AskResult byte-identical to the bare
+poll, plus the trace: `draft_answer` (as written, even when the verifier
+rejected it — it surfaces ONLY here, explicitly `draft_rejected: true`),
+`draft_rejected`, and `verifier_raw` (the verifier's raw JSON; null when its
+model call never reached the provider — never reconstructed). Core gained
+`AskEvidence`/`AskRun` + `AskPipeline.RunWithEvidence` (one deliberate Core
+change; `Run` delegates to it, so CLI/MCP/eval contracts are untouched and
+no model call was added). Running/errored/unknown polls ignore the flag —
+verdict-before-output holds: no trace exists before Done. Also shipped (the
+one deliberate HTTP change beyond the flag): `Task.Yield` in
+`AskJobStore.RunAsync` detaches job execution from the submit call stack —
+under the fake test seam every await completes synchronously, so without it
+the whole job ran inline inside POST /ask (the running window was
+unobservable in tests; production has real async model calls). Tests: 9
+added (4 pipeline-level, 5 endpoint-level incl. byte-identical nested
+result); the bare-poll contract test passes unmodified; 119/119 green.
 
-**Why:** strongest portfolio demo of the verifier gate ("escalations
-auditable over curl"); today an escalation's reasoning is only visible
-via the CLI render.
-
-**Context:** declined as Approach C in the 2026-09-07 office-hours session
-(design-2026-09-07-http-api.md "Approaches") purely on plan-faithful
-grounds, not merit. Cheap increment once the HTTP API ships. Start:
-optional query param + response extension in CsAgent.Http, reuse
-AskResult internals.
-
-**Depends on:** HTTP API v1 shipped (plan of record:
-design-2026-09-07-http-api.md).
+**Demo line:** escalations are now auditable over curl — poll with the
+flag, read the rejected draft next to the verifier JSON that killed it.
 
 ## DONE: 202 + GET /result/{id} upgrade — triggered by measured p95, shipped with the HTTP API (2026-09-07; was eng review D10)
 

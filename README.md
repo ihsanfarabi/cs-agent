@@ -195,6 +195,14 @@ $ curl -s http://127.0.0.1:5123/ask -H 'Content-Type: application/json' \
 # 2. poll until status leaves "running"
 $ curl -s http://127.0.0.1:5123/result/e2e19695…
 { "question": "How do I rotate the API key?", "resolved": true, "answer": "…", … }
+
+# 3. optional trace bundle — audit an escalation over curl: the draft the
+#    verifier rejected, plus the raw verifier JSON (result untouched)
+$ curl -s "http://127.0.0.1:5123/result/e2e19695…?evidence=true"
+{
+  "result": { "question": "…", "resolved": false, "answer": null, "missing": [ … ], … },
+  "evidence": { "draft_answer": "…", "draft_rejected": true, "verifier_raw": "[ … ]" }
+}
 ```
 
 - **Done → 200** with the canonical `AskResult` JSON — byte-identical to
@@ -210,6 +218,12 @@ $ curl -s http://127.0.0.1:5123/result/e2e19695…
 - **Unknown id → 404.** Jobs live in process memory — a restart loses every
   id; resubmit to recover (documented v1 cut: no persistence, no eviction, no
   DELETE endpoint).
+- **`?evidence=true` on a done poll** returns the canonical result untouched
+  plus an `evidence` trace: `draft_answer` as written, `draft_rejected`, and
+  `verifier_raw` — the verifier's raw JSON output (null when its model call
+  failed to reach the provider). The rejected draft appears ONLY inside
+  `evidence`, never in the canonical result. Running/errored/unknown polls
+  ignore the flag.
 - Asks run **one at a time** behind a single pipeline; concurrent submits
   queue. `GET /health` answers 200 without touching the store or a model.
 - The server binds `127.0.0.1` only — it is explicitly a no-auth,
