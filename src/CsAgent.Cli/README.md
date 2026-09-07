@@ -25,6 +25,12 @@ cs-agent ask --json "What is your SLA?"   # machine-readable result object
 
 # 4. score the engine against the built-in fixture (exit 0 = pass gate)
 cs-agent eval
+
+# 5. serve the engine over HTTP — async job queue (POST /ask → 202, poll result)
+cs-agent serve --port 8080
+curl -X POST localhost:8080/ask -H "content-type: application/json" \
+  -d '{"question":"How do I rotate my API key?"}'
+curl localhost:8080/result/{id}    # 200 running → 200 done (same result object)
 ```
 
 The result object (one shape on every surface — CLI `--json`, MCP, eval):
