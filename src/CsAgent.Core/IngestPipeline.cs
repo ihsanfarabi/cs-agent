@@ -17,15 +17,19 @@ public sealed record IngestSummary(
 /// <summary>
 /// Path or URL mode ingest: load → chunk → embed (batched) → store, page
 /// by page. Idempotent: a page whose content hash is unchanged is skipped
-/// without re-embedding, so a killed ingest resumes where it stopped.
+/// without re-embedding, so a killed ingest resumes where it stopped. Batch
+/// embeds are bounded by the shared model-call ceiling — a stalled embedding
+/// route is a structured error, never a wedge.
 /// </summary>
 public sealed class IngestPipeline(
     IEmbeddingGenerator<string, Embedding<float>> embeddings,
     SqliteVectorStore store,
     int chunkSize,
     int chunkOverlap,
-    int embedBatchSize = 64)
+    int embedBatchSize = 64,
+    TimeSpan? embedCallTimeout = null)
 {
+    private readonly TimeSpan _embedCallTimeout = embedCallTimeout ?? ModelCallTimeout.Default;
     public IngestSummary Run(string rootPath, string corpusName) =>
         Run(CorpusLoader.Load(rootPath), corpusName);
 
@@ -59,7 +63,9 @@ public sealed class IngestPipeline(
             var withEmbeddings = new List<(string Text, float[] Embedding)>(chunks.Count);
             foreach (var batch in Batch(chunks, embedBatchSize))
             {
-                var vectors = embeddings.GenerateAsync(batch).GetAwaiter().GetResult();
+                var vectors = ModelCallTimeout.Await("embedding",
+                    ct => embeddings.GenerateAsync(batch, cancellationToken: ct),
+                    _embedCallTimeout, cancellationToken: default);
                 if (vectors.Count != batch.Count)
                     throw new CsAgentException(new CsAgentError(
                         "ingest", "embedding-count-mismatch",

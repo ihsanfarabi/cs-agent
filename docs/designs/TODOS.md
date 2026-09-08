@@ -46,8 +46,11 @@ unbounded provider stall — an OpenRouter route accepts the verify call
 NetworkTimeout did not surface). Fix: per model-call ceiling in AskPipeline
 (240s, race-based) — draft timeout = structured `model/call-timeout` error,
 verify timeout = one retry then fail-closed escalate with a "timed out" note.
-Known gap: the embedding call inside Retriever is not yet bounded (never
-observed stalled).
+Gap closed same day (2026-09-08): the ceiling was extracted into the shared
+`ModelCallTimeout` helper and now bounds BOTH embedding call sites — the
+query embed in `Retriever` and the batch embed in `IngestPipeline` (stage
+name "embedding", same `model/call-timeout` error; never observed stalled,
+closed by inspection of the same stall class). Suite 160.
 
 ## DONE: image-hardening pass for the GHCR image (closed 2026-09-08, v0.5.0; was opened 2026-09-07 by /plan-eng-review on the Docker plan)
 

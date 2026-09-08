@@ -11,16 +11,26 @@ public sealed record CitedChunk(
 
 /// <summary>
 /// Query embed + MMR diversity selection over the store's full scored pool;
-/// chunks numbered [1..k] relevance-descending for citation.
+/// chunks numbered [1..k] relevance-descending for citation. The query embed
+/// is bounded by the shared model-call ceiling — a stalled embedding route
+/// is a structured error, never a wedge.
 /// </summary>
-public sealed class Retriever(IEmbeddingGenerator<string, Embedding<float>> embeddings, SqliteVectorStore store, int topK)
+public sealed class Retriever(
+    IEmbeddingGenerator<string, Embedding<float>> embeddings,
+    SqliteVectorStore store,
+    int topK,
+    TimeSpan? embedCallTimeout = null)
 {
     /// <summary>Relevance/diversity trade-off — fixed, not env-tunable (agreed 2026-09-08).</summary>
     public const float Lambda = 0.7f;
 
+    private readonly TimeSpan _embedCallTimeout = embedCallTimeout ?? ModelCallTimeout.Default;
+
     public IReadOnlyList<CitedChunk> Retrieve(string question, CancellationToken cancellationToken = default)
     {
-        var vector = embeddings.GenerateVectorAsync(question, cancellationToken: cancellationToken).GetAwaiter().GetResult();
+        var vector = ModelCallTimeout.Await("embedding",
+            ct => embeddings.GenerateVectorAsync(question, cancellationToken: ct),
+            _embedCallTimeout, cancellationToken);
         var pool = store.Pool(vector.Span);
         var selected = MmrSelect(vector.Span, pool, topK, Lambda);
         return [.. selected.Select((c, i) => new CitedChunk(i + 1, c.Hit.PagePath, c.Hit.Ordinal, c.Hit.Text, c.Hit.Score))];

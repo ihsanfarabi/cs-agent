@@ -46,18 +46,7 @@ public sealed class AskPipeline(
     Action<string>? progress = null,
     TimeSpan? modelCallTimeout = null)
 {
-    /// <summary>
-    /// Per model-call ceiling. Observed live: an OpenRouter route accepted the
-    /// verify request, returned 200 + headers, and never streamed the body —
-    /// the in-flight call held the serve job gate for 20+ minutes with no
-    /// framework default firing (ClientModel's shared HttpClient disables the
-    /// HttpClient timeout; its own per-message timeout did not surface). A
-    /// stalled call must become a loud error (draft) or a fail-closed escalate
-    /// (verify), never a wedge. Overridable only for tests.
-    /// </summary>
-    internal static readonly TimeSpan DefaultModelCallTimeout = TimeSpan.FromSeconds(240);
-
-    private readonly TimeSpan _modelCallTimeout = modelCallTimeout ?? DefaultModelCallTimeout;
+    private readonly TimeSpan _modelCallTimeout = modelCallTimeout ?? ModelCallTimeout.Default;
     public AskResult Run(string question, CancellationToken cancellationToken = default)
         => RunWithEvidence(question, cancellationToken).Result;
 
@@ -144,36 +133,13 @@ public sealed class AskPipeline(
     }
 
     /// <summary>
-    /// Bounds ONE model call. The linked token aborts the underlying HTTP call
-    /// where the provider stack honors it; the race bounds it even where it
-    /// does not (a stalled call is abandoned, never awaited — the gate must be
-    /// released regardless). Shutdown cancellation propagates unchanged.
+    /// Bounds ONE model call via the shared <see cref="ModelCallTimeout"/>
+    /// ceiling (linked token where the provider stack honors it, race
+    /// otherwise). Draft timeout = loud structured error; verify timeout is
+    /// caught by VerifyOnce for its retry-then-fail-closed path.
     /// </summary>
     private T AwaitModelCall<T>(string stage, Func<CancellationToken, Task<T>> call, CancellationToken cancellationToken)
-    {
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        cts.CancelAfter(_modelCallTimeout);
-        var task = call(cts.Token);
-        if (!task.IsCompleted && Task.WaitAny(task, Task.Delay(_modelCallTimeout, cts.Token)) != 0)
-        {
-            if (cancellationToken.IsCancellationRequested)
-                throw new OperationCanceledException(cancellationToken);
-            throw TimeoutError(stage);
-        }
-        try
-        {
-            return task.GetAwaiter().GetResult();
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested is false)
-        {
-            // the call honored the linked token and cancelled itself — same
-            // timeout, reported through the same structured error
-            throw TimeoutError(stage);
-        }
-
-        CsAgentException TimeoutError(string s) => new(new CsAgentError("model", "call-timeout",
-            $"{s} model call did not complete within {_modelCallTimeout.TotalSeconds:0}s — provider stalled or unreachable."));
-    }
+        => ModelCallTimeout.Await(stage, call, _modelCallTimeout, cancellationToken);
 
     /// <summary>
     /// Agents are built with temperature 0 by their factory (ChatClientAgentOptions
