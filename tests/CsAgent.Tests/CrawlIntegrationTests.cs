@@ -160,4 +160,68 @@ public sealed class CrawlIntegrationTests : IDisposable
         Assert.True(result.Resolved);
         Assert.All(result.CitedChunks, c => Assert.StartsWith(server.BaseUrl + "/", c.PagePath));
     }
+
+    // --- ingest hygiene (design-2026-09-08-ingest-hygiene.md) ---
+
+    [Fact]
+    public void NonEnglishPage_SkippedWithReason()
+    {
+        using var server = new CrawlServer(
+            new CrawlServer.Route("/", Page("Home", "<a href='/zh'>z</a>")),
+            new CrawlServer.Route("/zh", "<html lang='zh-CN'><body><main><h1>Chinese page</h1></main></body></html>"));
+
+        var result = new HtmlCrawler(TimeSpan.Zero).Crawl(new Uri(server.BaseUrl + "/"));
+
+        Assert.Equal(1, result.Fetched);
+        Assert.Single(result.Pages);
+        Assert.Contains(result.Skipped, s => s.Contains("non-English page") && s.Contains("lang=zh-CN"));
+    }
+
+    [Fact]
+    public void EnglishAndUntaggedPages_Pass()
+    {
+        using var server = new CrawlServer(
+            new CrawlServer.Route("/", "<html lang='en'><body><main><a href='/en-us'>e</a><a href='/plain'>p</a></main></body></html>"),
+            new CrawlServer.Route("/en-us", "<html lang='en-US'><body><main>en-us page</main></body></html>"),
+            new CrawlServer.Route("/plain", "<html><body><main>untagged page</main></body></html>"));
+
+        var result = new HtmlCrawler(TimeSpan.Zero).Crawl(new Uri(server.BaseUrl + "/"));
+
+        Assert.Equal(3, result.Fetched);
+        Assert.DoesNotContain(result.Skipped, s => s.Contains("non-English"));
+    }
+
+    [Fact]
+    public void CanonicalDuplicate_Skipped()
+    {
+        // /copy declares a relative canonical → /original (already ingested) — skipped.
+        // Relative href: resolved against the page URL inside ParsePage, so the
+        // route body needs no server URL at construction time.
+        using var server = new CrawlServer(
+            new CrawlServer.Route("/", Page("Home", "<a href='/original'>o</a><a href='/copy'>c</a>")),
+            new CrawlServer.Route("/original", Page("Original", "")),
+            new CrawlServer.Route("/copy",
+                "<html><head><link rel='canonical' href='/original'></head><body><main>copy</main></body></html>"));
+
+        var result = new HtmlCrawler(TimeSpan.Zero).Crawl(new Uri(server.BaseUrl + "/"));
+
+        Assert.Equal(2, result.Fetched);
+        Assert.Contains(result.Skipped, s => s.Contains("duplicate of"));
+    }
+
+    [Fact]
+    public void FrontierDedupes_SlashTwins()
+    {
+        // three hrefs, one identity (/x, /x/, /x/index.html collapse in the
+        // queue key) — only one fetch happens
+        using var server = new CrawlServer(
+            new CrawlServer.Route("/", Page("Home", "<a href='/x/'>a</a><a href='/x'>b</a><a href='/x/index.html'>c</a>")),
+            new CrawlServer.Route("/x", Page("X", "")));
+
+        var result = new HtmlCrawler(TimeSpan.Zero).Crawl(new Uri(server.BaseUrl + "/"));
+
+        var xHits = server.Hits.Count(h => h.Path.StartsWith("/x"));
+        Assert.Equal(1, xHits);
+        Assert.Equal(2, result.Fetched);
+    }
 }

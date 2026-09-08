@@ -60,10 +60,11 @@ public sealed class HtmlCrawler
 
         var pages = new List<LoadedPage>();
         var skipped = new List<string>();
-        var queued = new HashSet<string>(StringComparer.Ordinal);
+        var queued = new HashSet<string>(StringComparer.Ordinal);   // identity keys (slash/index twins collapse)
+        var seenIdentities = new HashSet<string>(StringComparer.Ordinal); // ingested page identities
         var queue = new Queue<(Uri Url, int Depth)>();
         var start = new Uri(seed.GetLeftPart(UriPartial.Path)); // fragment+query stripped
-        queued.Add(start.ToString());
+        queued.Add(NormalizeIdentity(start));
         queue.Enqueue((start, 0));
 
         var fetched = 0;
@@ -115,6 +116,19 @@ public sealed class HtmlCrawler
                     skipped.Add($"{urlString} — meta robots noindex");
                     continue;
                 }
+                if (crawled.Lang is not null
+                    && !crawled.Lang.Equals("en", StringComparison.OrdinalIgnoreCase)
+                    && !crawled.Lang.StartsWith("en-", StringComparison.OrdinalIgnoreCase))
+                {
+                    skipped.Add($"{urlString} — non-English page (lang={crawled.Lang})");
+                    continue;
+                }
+                var identity = NormalizeIdentity(crawled.Canonical ?? finalUrl);
+                if (!seenIdentities.Add(identity))
+                {
+                    skipped.Add($"{urlString} — duplicate of {identity}");
+                    continue;
+                }
                 if (crawled.Markdown.Length == 0)
                 {
                     skipped.Add($"{urlString} — no extractable content");
@@ -127,7 +141,7 @@ public sealed class HtmlCrawler
                 // links found on depth-max pages are discovered but never fetched
                 if (depth < _maxDepth)
                     foreach (var link in ExtractLinks(html, finalUrl))
-                        if (queued.Add(link.ToString()))
+                        if (queued.Add(NormalizeIdentity(link)))
                             queue.Enqueue((link, depth + 1));
             }
             catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
