@@ -24,7 +24,17 @@ public static class CsAgentRuntime
         AIAgent Verify() => DeterministicAgent(client, cfg.VerifyModel, "Verify",
             "You output ONLY the JSON claims array described in the prompt.");
 
-        return new AskPipeline(Draft, Verify, retriever, progress);
+        // escalation actions are opt-in (CS_AGENT_ESCALATION_WEBHOOK set): the
+        // dispatcher builds a temp-0 Escalation agent per dispatch with ONE tool.
+        // No new model var — escalation reuses CS_AGENT_DRAFT_MODEL.
+        EscalationDispatcher? escalation = null;
+        if (cfg.EscalationWebhook is { } webhook)
+            escalation = new EscalationDispatcher(
+                (_, tool) => new DeterministicChatClient(client.GetChatClient(cfg.DraftModel).AsIChatClient())
+                    .AsAIAgent(name: "Escalation", instructions: Prompts.EscalationInstructions(), tools: [tool]),
+                webhook);
+
+        return new AskPipeline(Draft, Verify, retriever, progress, escalation: escalation);
     }
 
     public static IngestSummary IngestPath(CsAgentConfig cfg, string path, string? storePath = null)
