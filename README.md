@@ -40,14 +40,16 @@ ingest ──► retrieve top-k ──► draft (cited) ──► verify (ONE mo
 - **The verifier is one model call** with a single prompt containing two labeled
   sections (claim extraction, support judgment), returning structured claims JSON.
   Worst case: 3 chat calls per question (draft + verify, plus one retry if the
-  verifier emits malformed JSON twice).
+  verifier emits malformed JSON twice) — 4 when escalation actions are enabled
+  and the verdict is escalate (the ticket agent adds one call).
 - **Escalate is the safe default.** Any unsupported claim, zero claims, or
   malformed verifier JSON twice → escalate, with a `missing[]` payload naming what
   the docs lack. A rejected draft is never printed.
 - **One result object, every surface.** `answer · citations · claims[] · calls ·
   seconds · estimated_cost` live in one object; the CLI renders it (plus `--json`),
   the HTTP poll returns it byte-identical, the MCP server exposes the fields, and
-  eval scores it.
+  eval scores it. When escalation actions run, the same object carries
+  `escalation_action` (absent when the feature is off).
 
 ## Quickstart
 
@@ -132,6 +134,74 @@ One shape on every surface — CLI `--json`, MCP tool output, eval records:
   "calls": 2, "seconds": 6.7, "estimated_cost": "— (non-default model)"
 }
 ```
+
+## Escalation actions (opt-in)
+
+An escalate verdict is a dead end by default — the CLI prints `✗ escalate` and
+stops. Set `CS_AGENT_ESCALATION_WEBHOOK` to an absolute `http(s)` URL and every
+escalate verdict additionally **files a ticket via MAF tool-calling** — the one
+core Microsoft Agent Framework feature this repo showcases: a fourth model call
+runs an *escalation agent* (temperature 0, the draft model reused — no separate
+model var) whose single tool, `file_ticket(title, body)`, composes a
+human-readable ticket from the failed ask and POSTs it to your webhook. The
+verdict itself is never modified; the result object records what happened in an
+`escalation_action` field (absent when the feature is off — unset the var and
+behavior returns to today's, byte-identically).
+
+Cost line: worst case **4 model calls per question when escalation actions are
+enabled and the verdict is escalate** (draft + verify + the ticket agent;
+unchanged 3 max otherwise).
+
+```bash
+# Slack incoming webhook — the URL carries the secret, so no auth header is needed
+export CS_AGENT_ESCALATION_WEBHOOK="https://hooks.slack.com/services/T000/B000/XXXX"
+cs-agent ask "What is your SLA uptime percentage?"
+✗ escalate — cannot answer from ingested docs
+
+Claims:
+[1] ✓ "Keys rotate from Settings"
+[1] ✗ "SLA uptime is 99.9%"
+
+Missing:
+[1] "SLA uptime is 99.9%" — no supporting chunk states this claim explicitly
+→ ticket filed: SLA uptime question
+
+3 model calls · 9.8s · — (non-default model)
+```
+
+The POST is code-enriched, not LLM-carried — the agent supplies only the ticket
+title and body; the question, missing items, citations, and timestamp come from
+the failed ask itself:
+
+```json
+{
+  "tool": "cs-agent-escalation",
+  "question": "What is your SLA uptime percentage?",
+  "title": "SLA uptime question",
+  "body": "User asked about SLA uptime; the ingested docs lack it…",
+  "missing": ["SLA uptime is 99.9%"],
+  "citations": ["docs/api-keys.md"],
+  "timestamp": "2026-09-08T19:10:20.1234567Z"
+}
+```
+
+The outcome rides the result object on every surface (CLI line above, `--json`,
+HTTP `/result/{id}`, MCP):
+
+```json
+"escalation_action": { "tool": "file_ticket", "status": "sent", "title": "SLA uptime question", "detail": "HTTP 200" }
+```
+
+- `status:"sent"` on any 2xx receipt; `status:"failed"` otherwise — the agent
+  never calling the tool, a non-2xx response (`detail:"HTTP 500"`), a POST
+  timeout, or an agent timeout all record a failed action with the reason in
+  `detail`. A failed ticket never changes the verdict or the exit code.
+- Best-effort, one attempt, no retry: the same ask asked twice posts twice.
+- Bounded like every model call: the 240s `ModelCallTimeout` ceiling on the
+  agent, 30s on the POST — a stalled route is a `failed` record, never a wedge.
+- No auth/bearer headers in v1 — secret-in-URL receivers (Slack, Discord,
+  webhook.site) only. Set but malformed (`ftp://x`, `not a url`) fails at
+  startup with `config/invalid-env-value` and exit 1, before any model call.
 
 ## Eval results (honest numbers)
 
@@ -323,6 +393,9 @@ matter for real console agents:
 - `ChatClientAgent` + `AsAIAgent(name:, instructions:)` — the core agent seam
   (`src/CsAgent.Core/CsAgentRuntime.cs`)
 - `RunAsync<T>` structured output for the verifier's claims JSON
+- MAF tool-calling: `AIFunctionFactory.Create` for the `file_ticket` tool plus
+  the `AsAIAgent` tools overload — a per-dispatch closure so concurrent asks
+  never share state (`src/CsAgent.Core/EscalationDispatcher.cs`)
 - A `DeterministicChatClient` `IChatClient` wrapper that pins temperature 0 on
   every call — the agent-level wrap is the reliable hook, not per-call options
 - A handoff-graph stub with DevUI hosting under `prototype/` (trace recording
@@ -352,9 +425,8 @@ installable product with an eval harness.
    restart (poll → 404, resubmit to recover); no eviction, TTL, or DELETE.
    Persistence waits for the Postgres work.
 
-Deferred work: Postgres storage and
-escalation-with-actions (the escalation path gaining MAF tool-calling so a
-"cannot answer" can open a ticket or notify a human).
+Deferred work: Postgres storage (the escalation-with-actions feature shipped
+above; HTTP job persistence is the remaining storage gap).
 
 ## License
 
