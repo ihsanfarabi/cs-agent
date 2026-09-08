@@ -140,6 +140,10 @@ try
             Console.WriteLine("Missing:");
             foreach (var m in (r.Missing ?? []))
                 Console.WriteLine($"[1] \"{m.Claim}\" — {m.Note}");
+            if (r.EscalationAction is { } action)
+                Console.WriteLine(action.Status == "sent"
+                    ? $"→ ticket filed: {action.Title}"
+                    : $"→ ticket failed: {action.Detail}");
         }
         Console.WriteLine();
         Console.WriteLine($"{r.Calls} model calls · {r.Seconds:F1}s · {r.CostEstimate}");

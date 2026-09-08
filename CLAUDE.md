@@ -54,8 +54,9 @@ the fixture.
    re-tuned). README carries both.
 
 Plus the deferred queue: `docs/designs/TODOS.md` (CI eval gate) and the design
-doc's post-publish order (URL crawl, HTTP API, Docker, Postgres, 10x
-escalation-with-actions).
+doc's post-publish order (URL crawl, HTTP API, Docker, Postgres). Shipped
+2026-09-08: escalation-with-actions (MAF tool-calling on the escalate verdict,
+`CS_AGENT_ESCALATION_WEBHOOK`, issue #8).
 
 ## Conventions
 

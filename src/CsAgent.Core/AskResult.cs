@@ -18,7 +18,21 @@ public sealed record AskResult(
     [property: JsonPropertyName("citations")] IReadOnlyList<CitedChunk> CitedChunks,
     [property: JsonPropertyName("calls")] int Calls,
     [property: JsonPropertyName("seconds")] double Seconds,
-    [property: JsonPropertyName("estimated_cost")] string? CostEstimate);
+    [property: JsonPropertyName("estimated_cost")] string? CostEstimate,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [property: JsonPropertyName("escalation_action")]
+    EscalationActionRecord? EscalationAction = null);
+
+/// <summary>
+/// What the escalation agent did after an escalate verdict: which tool ran,
+/// whether the ticket reached the webhook, and the agent-composed title or the
+/// failure reason. Never fabricated — absent means no action was attempted.
+/// </summary>
+public sealed record EscalationActionRecord(
+    [property: JsonPropertyName("tool")] string Tool,
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("title")] string? Title,
+    [property: JsonPropertyName("detail")] string? Detail);
 
 /// <summary>
 /// The optional audit trace for one completed ask. Retrieved chunks and
@@ -44,7 +58,8 @@ public sealed class AskPipeline(
     Func<AIAgent> verifyAgentFactory,
     Retriever retriever,
     Action<string>? progress = null,
-    TimeSpan? modelCallTimeout = null)
+    TimeSpan? modelCallTimeout = null,
+    EscalationDispatcher? escalation = null)
 {
     private readonly TimeSpan _modelCallTimeout = modelCallTimeout ?? ModelCallTimeout.Default;
     public AskResult Run(string question, CancellationToken cancellationToken = default)
@@ -74,8 +89,6 @@ public sealed class AskPipeline(
         progress?.Invoke("verifying");
         var (claims, verifierRaw, verifierTimedOut) = VerifyOnce(question, answer, chunks, cancellationToken);
 
-        stopwatch.Stop();
-
         AskResult result;
         if (claims is null)
             // second failure ⇒ fail closed to escalate; the note says which kind
@@ -90,6 +103,19 @@ public sealed class AskPipeline(
         else
             result = new AskResult(question, false, null, VerifierRule.BuildMissing(claims, question),
                 claims, chunks, Calls: 2, stopwatch.Elapsed.TotalSeconds, CostLine());
+
+        // escalation action (opt-in): the verdict is final before this runs and
+        // is never modified — only the outcome of filing the ticket is recorded
+        if (result.Resolved is false && escalation is not null)
+        {
+            var record = escalation.TryDispatch(
+                new EscalationContext(question, result.Missing ?? [], chunks, answer), cancellationToken);
+            stopwatch.Stop(); // honest wall time — seconds includes the action when enabled
+            result = result with { Seconds = stopwatch.Elapsed.TotalSeconds };
+            if (record is not null) // a cancelled dispatch leaves the 3-call result untouched
+                result = result with { EscalationAction = record, Calls = result.Calls + 1 };
+        }
+        else stopwatch.Stop();
 
         return new AskRun(result, new AskEvidence(answer, !result.Resolved, verifierRaw));
     }

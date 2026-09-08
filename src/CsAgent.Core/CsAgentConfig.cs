@@ -16,7 +16,8 @@ public sealed record CsAgentConfig(
     int TopK,
     int ChunkSize,
     int ChunkOverlap,
-    string StorePath)
+    string StorePath,
+    Uri? EscalationWebhook = null)
 {
     /// <summary>The full CS_AGENT_* var set every surface must forward to the pipeline.</summary>
     public static readonly string[] EnvKeys =
@@ -24,7 +25,7 @@ public sealed record CsAgentConfig(
         "CS_AGENT_MODEL_KEY", "CS_AGENT_BASE_URL", "CS_AGENT_DRAFT_MODEL",
         "CS_AGENT_VERIFY_MODEL", "CS_AGENT_EMBEDDING_MODEL",
         "CS_AGENT_EMBEDDING_DEPLOYMENT", "CS_AGENT_TOP_K", "CS_AGENT_CHUNK_SIZE",
-        "CS_AGENT_CHUNK_OVERLAP", "CS_AGENT_STORE",
+        "CS_AGENT_CHUNK_OVERLAP", "CS_AGENT_STORE", "CS_AGENT_ESCALATION_WEBHOOK",
     ];
 
     /// <summary>Reads the env vars from the process environment (MCP servers inherit them from the host).</summary>
@@ -46,6 +47,7 @@ public sealed record CsAgentConfig(
         var chunkSize = ValidateInt(env, "CS_AGENT_CHUNK_SIZE", 1200, min: 200, max: 10_000);
         var overlap = ValidateInt(env, "CS_AGENT_CHUNK_OVERLAP", 150, min: 0, max: chunkSize - 1);
         var baseUrl = NonEmpty(env, "CS_AGENT_BASE_URL", "https://openrouter.ai/api/v1");
+        var escalationWebhook = OptionalHttpUrl(env, "CS_AGENT_ESCALATION_WEBHOOK");
 
         return new CsAgentConfig(
             ModelKey: key,
@@ -60,7 +62,23 @@ public sealed record CsAgentConfig(
             TopK: topK,
             ChunkSize: chunkSize,
             ChunkOverlap: overlap,
-            StorePath: NonEmpty(env, "CS_AGENT_STORE", ""));
+            StorePath: NonEmpty(env, "CS_AGENT_STORE", ""),
+            EscalationWebhook: escalationWebhook);
+    }
+
+    /// <summary>
+    /// Optional escalation webhook: unset/whitespace = feature off; anything set
+    /// must be an absolute http(s) URL — validated at startup, before any model
+    /// call.
+    /// </summary>
+    private static Uri? OptionalHttpUrl(IReadOnlyDictionary<string, string?> env, string name)
+    {
+        if (!env.TryGetValue(name, out var raw) || string.IsNullOrWhiteSpace(raw)) return null;
+        if (!Uri.TryCreate(raw, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https"))
+            throw new CsAgentException(new CsAgentError(
+                "config", "invalid-env-value",
+                $"{name} must be an absolute http(s) URL; got \"{raw}\"."));
+        return uri;
     }
 
     private static string NonEmpty(

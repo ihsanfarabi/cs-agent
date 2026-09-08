@@ -47,14 +47,30 @@ public sealed class HttpApiTests : IDisposable
     }
 
     private AskPipeline MakePipeline(
-        string draftAnswer, string verifyJson, bool seedStore = true)
+        string draftAnswer, string verifyJson, bool seedStore = true,
+        EscalationDispatcher? escalation = null)
     {
         if (seedStore) SeedStore();
         else _ = NewStore(_dbPath); // schema-only store: empty, but openable (no stray-file lie)
         var retriever = new Retriever(new FakeEmbeddingGenerator(), NewStore(_dbPath), topK: 5);
         ChatClientAgent Draft() => new(new FakeChatClient(_ => draftAnswer));
         ChatClientAgent Verify() => new(new FakeChatClient(_ => verifyJson));
-        return new AskPipeline(Draft, Verify, retriever);
+        return new AskPipeline(Draft, Verify, retriever, escalation: escalation);
+    }
+
+    /// <summary>Dispatcher against a capturing handler: the ticket loop runs in-process.</summary>
+    private static (EscalationDispatcher Dispatcher, CapturingHandler Handler) MakeEscalation()
+    {
+        var client = new ToolCallChatClient("file_ticket", new Dictionary<string, object?>
+        {
+            ["title"] = "SLA uptime question",
+            ["body"] = "User asked about SLA uptime; docs lack it.",
+        });
+        var handler = new CapturingHandler((_, _) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)));
+        return (new EscalationDispatcher(
+            (_, tool) => client.AsAIAgent(name: "Escalation", tools: [tool]),
+            new Uri("https://hooks.example.com/x"), handler), handler);
     }
 
     private AskPipeline MakeThrowingPipeline(
@@ -161,6 +177,47 @@ public sealed class HttpApiTests : IDisposable
         Assert.False(result.Resolved);
         Assert.Null(result.Answer); // rejected draft never surfaces
         Assert.NotEmpty(result.Missing!);
+    }
+
+    [Fact]
+    public async Task EscalateWithAction_PollCarriesEscalationAction()
+    {
+        var (escalation, handler) = MakeEscalation();
+        using var client = await StartAsync(MakePipeline(
+            "Rotate from Settings [1]. SLA uptime is 99.9%.", EscalateJson, escalation: escalation));
+
+        var id = await SubmitAsync(client, "What is your SLA uptime?");
+        using var done = await PollSettledAsync(client, id);
+
+        Assert.Equal(HttpStatusCode.OK, done.StatusCode);
+        var body = await done.Content.ReadAsStringAsync();
+        var result = JsonSerializer.Deserialize<AskResult>(body, CsAgentJson.SerializerOptions)!;
+        Assert.False(result.Resolved);
+        Assert.NotNull(result.EscalationAction); // the action rides the canonical result, free
+        Assert.Equal("sent", result.EscalationAction!.Status);
+        Assert.Equal("SLA uptime question", result.EscalationAction.Title);
+        Assert.Equal(3, result.Calls); // verdict calls + the escalation agent
+        // byte-identical to canonical serialization — the surface adds nothing
+        Assert.Equal(JsonSerializer.Serialize(result, CsAgentJson.SerializerOptions), body);
+        Assert.NotNull(handler.LastBody); // the POST left through the dispatcher
+    }
+
+    [Fact]
+    public async Task EscalateWithoutAction_BarePollHasNoEscalationAction()
+    {
+        using var client = await StartAsync(MakePipeline(
+            "Rotate from Settings [1]. SLA uptime is 99.9%.", EscalateJson));
+
+        var id = await SubmitAsync(client, "What is your SLA uptime?");
+        using var done = await PollSettledAsync(client, id);
+
+        Assert.Equal(HttpStatusCode.OK, done.StatusCode);
+        var body = await done.Content.ReadAsStringAsync();
+        Assert.DoesNotContain("escalation_action", body); // feature off: today's bytes, unchanged
+        var result = JsonSerializer.Deserialize<AskResult>(body, CsAgentJson.SerializerOptions)!;
+        Assert.False(result.Resolved);
+        Assert.Null(result.EscalationAction);
+        Assert.Equal(JsonSerializer.Serialize(result, CsAgentJson.SerializerOptions), body);
     }
 
     [Fact]
