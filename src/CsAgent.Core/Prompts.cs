@@ -10,6 +10,7 @@ public static class Prompts
 {
     public static string DraftInstructions() => Load("draft-instructions.md");
     public static string VerifyPrompt() => Load("verify-prompt.md");
+    public static string EscalationInstructions() => Load("escalation-instructions.md");
 
     private static string Load(string name)
     {
