@@ -43,8 +43,21 @@ public sealed class AskPipeline(
     Func<AIAgent> draftAgentFactory,
     Func<AIAgent> verifyAgentFactory,
     Retriever retriever,
-    Action<string>? progress = null)
+    Action<string>? progress = null,
+    TimeSpan? modelCallTimeout = null)
 {
+    /// <summary>
+    /// Per model-call ceiling. Observed live: an OpenRouter route accepted the
+    /// verify request, returned 200 + headers, and never streamed the body —
+    /// the in-flight call held the serve job gate for 20+ minutes with no
+    /// framework default firing (ClientModel's shared HttpClient disables the
+    /// HttpClient timeout; its own per-message timeout did not surface). A
+    /// stalled call must become a loud error (draft) or a fail-closed escalate
+    /// (verify), never a wedge. Overridable only for tests.
+    /// </summary>
+    internal static readonly TimeSpan DefaultModelCallTimeout = TimeSpan.FromSeconds(240);
+
+    private readonly TimeSpan _modelCallTimeout = modelCallTimeout ?? DefaultModelCallTimeout;
     public AskResult Run(string question, CancellationToken cancellationToken = default)
         => RunWithEvidence(question, cancellationToken).Result;
 
@@ -63,21 +76,24 @@ public sealed class AskPipeline(
         cancellationToken.ThrowIfCancellationRequested();
         progress?.Invoke("drafting");
         var draft = draftAgentFactory();
-        var draftResponse = draft.RunAsync(
-            FormatDraftPrompt(question, chunks), cancellationToken: cancellationToken).GetAwaiter().GetResult();
+        var draftResponse = AwaitModelCall("draft",
+            ct => draft.RunAsync(FormatDraftPrompt(question, chunks), cancellationToken: ct),
+            cancellationToken);
         var answer = draftResponse.Text.Trim();
 
         cancellationToken.ThrowIfCancellationRequested();
         progress?.Invoke("verifying");
-        var (claims, verifierRaw) = VerifyOnce(question, answer, chunks, cancellationToken);
+        var (claims, verifierRaw, verifierTimedOut) = VerifyOnce(question, answer, chunks, cancellationToken);
 
         stopwatch.Stop();
 
         AskResult result;
         if (claims is null)
-            // second malformed verdict ⇒ fail closed to escalate
+            // second failure ⇒ fail closed to escalate; the note says which kind
             result = new AskResult(question, false, null,
-                [new MissingItem(question, "verifier output malformed twice — failing closed")],
+                [new MissingItem(question, verifierTimedOut
+                    ? "verifier call timed out — failing closed"
+                    : "verifier output malformed twice — failing closed")],
                 [], chunks, Calls: 3, stopwatch.Elapsed.TotalSeconds, CostLine());
         else if (VerifierRule.Resolve(claims))
             result = new AskResult(question, true, answer, null, claims, chunks, Calls: 2,
@@ -89,21 +105,31 @@ public sealed class AskPipeline(
         return new AskRun(result, new AskEvidence(answer, !result.Resolved, verifierRaw));
     }
 
-    private (IReadOnlyList<ClaimVerdict>? Claims, string? Raw) VerifyOnce(
+    private (IReadOnlyList<ClaimVerdict>? Claims, string? Raw, bool TimedOut) VerifyOnce(
         string question, string answer, IReadOnlyList<CitedChunk> chunks, CancellationToken cancellationToken)
     {
         var verify = verifyAgentFactory();
         var prompt = FormatVerifyPrompt(question, answer, chunks);
         string? raw = null;
+        var timedOut = false;
         for (var attempt = 1; attempt <= 2; attempt++)
         {
             try
             {
-                var response = verify.RunAsync<IReadOnlyList<ClaimVerdict>>(
-                    prompt, cancellationToken: cancellationToken).GetAwaiter().GetResult();
+                var response = AwaitModelCall("verify",
+                    ct => verify.RunAsync<IReadOnlyList<ClaimVerdict>>(prompt, cancellationToken: ct),
+                    cancellationToken);
                 raw = response.Text; // captured BEFORE the Result check — malformed text IS the evidence
                 if (response.Result is not null)
-                    return (response.Result, raw);
+                    return (response.Result, raw, false);
+            }
+            catch (CsAgentException ex) when (ex.Error.Code == "call-timeout"
+                && cancellationToken.IsCancellationRequested is false)
+            {
+                // stalled call — same single retry as malformed output, then fail
+                // closed; the note distinguishes the two failure kinds.
+                timedOut = true;
+                continue; // no "output valid JSON" nudge — no output was ever seen
             }
             catch (Exception) when (cancellationToken.IsCancellationRequested is false)
             {
@@ -114,7 +140,39 @@ public sealed class AskPipeline(
             }
             prompt = prompt + "\n\nYour previous output was not valid JSON. Output ONLY the JSON array.";
         }
-        return (null, raw); // caller treats null claims as fail-closed to escalate
+        return (null, raw, timedOut); // caller treats null claims as fail-closed to escalate
+    }
+
+    /// <summary>
+    /// Bounds ONE model call. The linked token aborts the underlying HTTP call
+    /// where the provider stack honors it; the race bounds it even where it
+    /// does not (a stalled call is abandoned, never awaited — the gate must be
+    /// released regardless). Shutdown cancellation propagates unchanged.
+    /// </summary>
+    private T AwaitModelCall<T>(string stage, Func<CancellationToken, Task<T>> call, CancellationToken cancellationToken)
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        cts.CancelAfter(_modelCallTimeout);
+        var task = call(cts.Token);
+        if (!task.IsCompleted && Task.WaitAny(task, Task.Delay(_modelCallTimeout, cts.Token)) != 0)
+        {
+            if (cancellationToken.IsCancellationRequested)
+                throw new OperationCanceledException(cancellationToken);
+            throw TimeoutError(stage);
+        }
+        try
+        {
+            return task.GetAwaiter().GetResult();
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested is false)
+        {
+            // the call honored the linked token and cancelled itself — same
+            // timeout, reported through the same structured error
+            throw TimeoutError(stage);
+        }
+
+        CsAgentException TimeoutError(string s) => new(new CsAgentError("model", "call-timeout",
+            $"{s} model call did not complete within {_modelCallTimeout.TotalSeconds:0}s — provider stalled or unreachable."));
     }
 
     /// <summary>

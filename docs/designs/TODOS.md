@@ -1,5 +1,34 @@
 # TODOS — cs-agent
 
+## OPEN: draft-decline escalations on crawled corpora (opened 2026-09-08, zero-claims investigation)
+
+**What the investigation found (2026-09-08):** every observed "zero-claims
+verifier escalation" on the docusaurus store was the DRAFT declining ("The
+ingested docs do not answer this.") with the verifier correctly returning
+`[]` — the verifier prompt is NOT the problem and needs no change. Two upstream
+shapes, both live-reproduced: (a) garbage retrieval — top-8 for a navbar
+question was blog release posts, a zh-CN showcase page, and ReverseMarkdown
+HTML-soup chunks (`<div class="browserWindowMenuIcon_Vhuh">`, SVG path data);
+(b) draft over-declining on good chunks — a versioning question cited
+docusaurus.io/versions at 0.72 and the draft declined anyway.
+
+**Where this goes:** shape (a) belongs to the already-deferred retrieval
+upgrades (reranking/hybrid, ingest-time URL canonicalization) plus a possible
+crawl-time language filter (localized pages polluting the corpus). Shape (b)
+is draft-model judgment on the default pair — revisit only after (a), when
+retrieval is clean. No separate verifier work.
+
+**Side finding (fixed same day):** the same investigation reproduced an
+unbounded provider stall — an OpenRouter route accepts the verify call
+(json_schema response_format with MAF's embedded `$schema` keys), returns 200
++ headers, and never streams the body. No framework default fires (ClientModel
+1.14's shared HttpClient disables HttpClient.Timeout; its per-message 100s
+NetworkTimeout did not surface). Fix: per model-call ceiling in AskPipeline
+(240s, race-based) — draft timeout = structured `model/call-timeout` error,
+verify timeout = one retry then fail-closed escalate with a "timed out" note.
+Known gap: the embedding call inside Retriever is not yet bounded (never
+observed stalled).
+
 ## OPEN: image-hardening pass for the GHCR image (opened 2026-09-07 by /plan-eng-review on the Docker plan)
 
 **What:** follow-up hardening of `ghcr.io/ihsanfarabi/cs-agent`: cosign signing
