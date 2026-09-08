@@ -29,31 +29,45 @@ verify timeout = one retry then fail-closed escalate with a "timed out" note.
 Known gap: the embedding call inside Retriever is not yet bounded (never
 observed stalled).
 
-## OPEN: image-hardening pass for the GHCR image (opened 2026-09-07 by /plan-eng-review on the Docker plan)
+## DONE: image-hardening pass for the GHCR image (closed 2026-09-08, v0.5.0; was opened 2026-09-07 by /plan-eng-review on the Docker plan)
 
-**What:** follow-up hardening of `ghcr.io/ihsanfarabi/cs-agent`: cosign signing
-(+ provenance attestations), chiseled/distroless base instead of standard
-aspnet:10.0, and a HEALTHCHECK-equivalent (the aspnet base ships no
-curl/wget, so v1 ships no HEALTHCHECK directive; orchestrators probe
-`GET /health`).
+**What shipped:** (1) runtime base swapped `aspnet:10.0` →
+`aspnet:10.0-noble-chiseled` (Ubuntu chiseled/distroless: no shell, no
+package manager, non-root `app` UID 1654 by default). The old `RUN mkdir /
+data && chown` was shell-dependent — chiseled has no shell, so `/data` is now
+created in the build stage and `COPY --from=build --chown=1654:1654`-d in;
+a `.keep` placeholder guards against builders skipping empty dirs. The
+--chown preserves the named-volume ownership mechanism (first mount copies
+app-owned /data into the volume) — verified live with a fresh volume.
+(2) `cs-agent healthcheck [--port N]` — new keyless, model-free CLI
+subcommand (GET `http://127.0.0.1:PORT/health`, same port precedence as
+serve; Program.cs dispatches it BEFORE config construction so keyless
+containers work) + the image's HEALTHCHECK directive runs it (exec form —
+no shell). Every failure is a named structured error (`healthcheck/bad-args`,
+`bad-port`, `unreachable`, `timeout`, `bad-status`), success silent.
+Adjacent fixes shipped with it: `--version` also moved before config (it
+required a model key before) and now reads the assembly version (the
+hardcoded `0.1.0` string had gone stale). (3) docker.yml publish job:
+`id-token: write`, buildx `provenance: true`, keyless `cosign sign` of the
+pushed manifest digest (digest, not tag aliases — same bytes), anchore
+sbom-action CycloneDX + `cosign attest --type cyclonedx`. Build job
+untouched (still catches Dockerfile rot). Tests: HealthCheckRunnerTests
+(10: Kestrel seam ok/env-port/refused/non-200/bad-args/bad-port-env/timeout,
+zero model calls), suite 151/151 green. Smoke: local chiseled build, fresh
+named-volume ingest, serve → HEALTHCHECK healthy, keyless healthcheck
+exit 1 unreachable (not missing-required-env), real ask resolved inside
+the container (invariant-globalization safe — no `-extra` ICU variant
+needed), multi-arch amd64+arm64 build green.
 
-**Why:** v1 image is an unsigned standard-base showcase artifact — fine for
-the demo story, not for real deployment. Hardening earns its keep when
-someone deploys the image for real.
-
-**Trigger:** first report of real-world deployment, or the post-publish
-hardening sweep alongside the reranking upgrade. **Trigger note (2026-09-08,
-eng review of the MMR plan):** the reranking upgrade is NOW in flight
-(design-2026-09-08-mmr-diversity.md), so this sweep moment arrived — but the
-entry's other line governs: "hardening earns its keep when someone deploys
-the image for real", and no deployment exists yet. Queued as the next
-increment candidate after MMR ships; not bundled into it.
-
-**Where to start:** `.github/workflows/docker.yml` (add cosign step after
-the push), `Dockerfile` (base swap; ENTRYPOINT unchanged), README
-limitiation text. Design doc `docs/designs/design-2026-09-07-docker-ghcr.md`
-"Not in scope" section lists the same items (that list goes stale; this
-entry is the living one).
+**Honest caveats:** plain chiseled ships no ICU (invariant globalization) —
+live smoke passed, fallback `-extra` documented here if a culture issue
+surfaces. Buildx provenance is a native referrer, not a cosign-signed DSSE:
+read it with `docker buildx imagetools inspect`, not `cosign
+verify-attestation` (the SBOM attestation IS cosign-verifiable). Signing
+runs after the push: a failed sign step leaves an unsigned image public on
+an immutable tag; the red workflow is the signal and `cosign sign` on the
+same digest is idempotent on re-run. A `CS_AGENT_BIND` override to a
+specific non-loopback IP dodges the built-in probe (documented in README).
 
 ## DONE: MMR retrieval diversity — issue #6 closed (2026-09-08)
 

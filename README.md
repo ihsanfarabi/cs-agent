@@ -74,6 +74,10 @@ cs-agent eval
 
 # 5. (optional) expose the same engine over loopback HTTP
 cs-agent serve
+
+# 6. probe a running serve from scripts/the container HEALTHCHECK (keyless,
+#    zero model calls; exit 0 on 200, named error + exit 1 otherwise)
+cs-agent healthcheck
 ```
 
 Default models (eval-gated pair, see below): `deepseek/deepseek-v4-flash-0731`
@@ -226,6 +230,9 @@ $ curl -s "http://127.0.0.1:5123/result/e2e19695…?evidence=true"
   ignore the flag.
 - Asks run **one at a time** behind a single pipeline; concurrent submits
   queue. `GET /health` answers 200 without touching the store or a model.
+- `cs-agent healthcheck [--port N]` GETs `http://127.0.0.1:PORT/health` (same
+  port precedence as `serve`), needs no model key, and is what the container
+  image's HEALTHCHECK directive runs.
 - The server binds `127.0.0.1` by default — it is explicitly a no-auth,
   no-rate-limit local tool. `CS_AGENT_BIND` (a single IP address, no
   hostnames) widens the bind for the container/reverse-proxy case and
@@ -268,8 +275,22 @@ proxy. Named volumes
 (the examples above) just work; if you bind-mount a host directory as
 `/data`, it is root-owned inside the container and the non-root app user
 cannot write the store — `chown` it to the container user or run with
-`--user`. There is no HEALTHCHECK directive in the image; orchestrators
-should probe `GET /health`. The MCP stdio server is not in the image — run
+`--user`. Since 0.5.0 the runtime base is Ubuntu chiseled (distroless: no
+shell, no package manager — `docker exec` needs exec-form commands), and the
+image ships a `HEALTHCHECK` running `cs-agent healthcheck` — a keyless,
+model-free probe that GETs `http://127.0.0.1:PORT/health` with the same
+`--port`/`CS_AGENT_PORT` precedence as `serve`; if you override
+`CS_AGENT_BIND` to a specific non-loopback IP the built-in probe cannot
+reach the server. Tagged images are keyless-signed with Sigstore cosign and
+carry a CycloneDX SBOM attestation plus native buildx provenance:
+
+```bash
+cosign verify ghcr.io/ihsanfarabi/cs-agent \
+  --certificate-identity-regexp '^https://github\.com/ihsanfarabi/cs-agent/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+The MCP stdio server is not in the image — run
 it from source per the MCP section below, so MCP clients never go through
 the container. Job memory, restart semantics, and all other
 HTTP limitations above apply unchanged.

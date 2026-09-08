@@ -3,6 +3,13 @@ using CsAgent.Core;
 
 try
 {
+    // healthcheck: zero model calls, no store, no key — dispatched BEFORE config
+    // construction (FromCurrentEnvironment throws missing-required-env without
+    // CS_AGENT_MODEL_KEY; the Docker HEALTHCHECK must run keyless containers).
+    if (args is ["healthcheck", ..])
+        return HealthCheckRunner.Run(args);
+    if (args is ["--version"])
+        return PrintVersion(); // version must not need an API key either
     var config = CsAgentConfig.FromCurrentEnvironment(new HashSet<string>(["fixtures"]));
     return args switch
     {
@@ -10,7 +17,6 @@ try
         ["ask", ..] => Ask(args, config),
         ["eval", ..] => Eval(args, config),
         ["serve", ..] => Serve(args, config),
-        ["--version"] => PrintVersion(),
         _ => Usage(),
     };
 
@@ -141,13 +147,16 @@ try
 
     int PrintVersion()
     {
-        Console.WriteLine("cs-agent 0.1.0");
+        // assembly version == the csproj <Version> the tag guard checks — a
+        // hardcoded string here went stale (printed 0.1.0 while shipping 0.4.x)
+        var version = System.Reflection.Assembly.GetEntryAssembly()!.GetName().Version!;
+        Console.WriteLine($"cs-agent {version.Major}.{version.Minor}.{version.Build}");
         return 0;
     }
 
     int Usage()
     {
-        Console.Error.WriteLine("usage: cs-agent <ingest <path-or-url> | ask [--json] \"<question>\" | eval [--heldout] [--fresh] | serve [--port N]>");
+        Console.Error.WriteLine("usage: cs-agent <ingest <path-or-url> | ask [--json] \"<question>\" | eval [--heldout] [--fresh] | serve [--port N] | healthcheck [--port N]>");
         return 1;
     }
 }

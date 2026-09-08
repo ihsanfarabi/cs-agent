@@ -32,6 +32,9 @@ curl -X POST localhost:8080/ask -H "content-type: application/json" \
   -d '{"question":"How do I rotate my API key?"}'
 curl localhost:8080/result/{id}                # 200 running → 200 done (same result object)
 curl "localhost:8080/result/{id}?evidence=true" # done + trace: rejected draft, raw verifier JSON
+
+# 6. healthcheck — probe a running serve (keyless, zero model calls; exit 0 on 200)
+cs-agent healthcheck --port 8080
 ```
 
 The result object (one shape on every surface — CLI `--json`, MCP, eval):

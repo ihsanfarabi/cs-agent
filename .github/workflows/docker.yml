@@ -58,6 +58,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write   # GitHub OIDC → cosign keyless signing
     steps:
       - uses: actions/checkout@v4
 
@@ -89,6 +90,7 @@ jobs:
           images: ghcr.io/ihsanfarabi/cs-agent
 
       - name: Build + push (amd64 + arm64, one multi-arch manifest)
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -96,6 +98,37 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # buildx SLSA in-toto provenance attached to the pushed index. Read it
+          # with `docker buildx imagetools inspect`, NOT cosign verify-attestation
+          # (it is a native buildx referrer, not a cosign-signed DSSE).
+          provenance: true
           cache-from: type=gha
           # No cache-to: multi-platform GHA cache export is a known buildx race
           # where one per-platform export is lost (buildx #1382).
+
+      # Keyless signing + SBOM attestation of the pushed manifest. The digest
+      # (not the tag aliases) is signed — v0.5.0/0.5.0/latest point at the same
+      # bytes, and per-alias signing would write duplicate signature manifests.
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v4.1.2
+
+      - name: Sign image (keyless, manifest digest)
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: cosign sign --yes ghcr.io/ihsanfarabi/cs-agent@$DIGEST
+
+      - name: Generate SBOM (CycloneDX)
+        uses: anchore/sbom-action@v0
+        with:
+          image: ghcr.io/ihsanfarabi/cs-agent@${{ steps.build.outputs.digest }}
+          format: cyclonedx-json
+          output-file: cs-agent-sbom.cdx.json
+          upload-artifact: false
+
+      - name: Attach SBOM attestation
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          cosign attest --yes --type cyclonedx \
+            --predicate cs-agent-sbom.cdx.json \
+            ghcr.io/ihsanfarabi/cs-agent@$DIGEST
