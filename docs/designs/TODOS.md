@@ -24,6 +24,20 @@ questions — is the input to the deferred hybrid/rerank decision, which stays
 behind that measurement. Shape (b) is draft-model judgment on the default
 pair — revisit only after retrieval is clean. No separate verifier work.
 
+**Live measurement (fresh docusaurus crawl, 2026-09-08, post-hygiene):**
+3,210 chunks from 200 pages vs 4,314 pre-hygiene (−26%); 92 localized pages
+skipped at fetch (zh-CN, ko, fr, pt-BR), 0 canonical-duplicate skips
+(docusaurus canonical tags are self-referential), slash twins collapsed
+pre-fetch (silent by design). Both investigation repro shapes resolve on
+the fresh store: the navbar-config question (was retrieving blog + zh-CN +
+HTML-soup) cites `/docs/api/docusaurus-config` and `/docs/blog`; the
+versioning question (shape (b), previously declined on a 0.72-relevance
+cited page) resolves citing migration + release-process pages. Honest
+caveat: two resolved repros do not isolate hygiene from model variance —
+the zh-CN garbage path is dead by construction (those pages are never
+ingested), but shape (b) may still recur; the hybrid/rerank decision input
+is now measured against a clean corpus.
+
 **Side finding (fixed same day):** the same investigation reproduced an
 unbounded provider stall — an OpenRouter route accepts the verify call
 (json_schema response_format with MAF's embedded `$schema` keys), returns 200
