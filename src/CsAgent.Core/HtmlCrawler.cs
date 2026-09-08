@@ -10,7 +10,7 @@ public sealed record CrawlResult(
     IReadOnlyList<string> Skipped,
     int Fetched);
 
-public sealed record CrawledPage(string Markdown, bool NoIndex);
+public sealed record CrawledPage(string Markdown, bool NoIndex, string? Lang, Uri? Canonical);
 
 /// <summary>
 /// Same-domain HTML crawl: fetch with HttpClient, DOM-parse with AngleSharp
@@ -109,7 +109,7 @@ public sealed class HtmlCrawler
                 }
 
                 var html = await response.Content.ReadAsStringAsync();
-                var crawled = await ParsePage(html);
+                var crawled = await ParsePage(html, finalUrl);
                 if (crawled.NoIndex)
                 {
                     skipped.Add($"{urlString} — meta robots noindex");
@@ -155,15 +155,32 @@ public sealed class HtmlCrawler
         return new Uri(absolute.GetLeftPart(UriPartial.Path));          // strips query + fragment
     }
 
-    internal static async Task<CrawledPage> ParsePage(string html)
+    internal static async Task<CrawledPage> ParsePage(string html, Uri baseUrl)
     {
         var document = await ParseAsync(html);
         var noIndex = document.QuerySelector("meta[name='robots']")?.GetAttribute("content")
             ?.Split(',').Any(t => t.Trim().Equals("noindex", StringComparison.OrdinalIgnoreCase))
             ?? false;
+        // language: <html lang> — absent/empty means allowed (English-default
+        // assumption); the skip decision itself lives in the crawl loop
+        var lang = document.DocumentElement.HasAttribute("lang")
+            ? document.DocumentElement.GetAttribute("lang") : null;
+        lang = string.IsNullOrWhiteSpace(lang) ? null : lang;
+        // canonical: same-host identity only — an off-host canonical link is
+        // never trusted (it would hand page identity to another site)
+        Uri? canonical = null;
+        var canonicalHref = document.QuerySelector("link[rel='canonical']")?.GetAttribute("href");
+        if (canonicalHref is not null && Uri.TryCreate(canonicalHref, UriKind.RelativeOrAbsolute, out var canonicalUri))
+        {
+            Uri? absolute = null;
+            if (canonicalUri.IsAbsoluteUri) absolute = canonicalUri;
+            else { try { absolute = new Uri(baseUrl, canonicalUri); } catch (UriFormatException) { } }
+            if (absolute is not null && absolute.Host == baseUrl.Host)
+                canonical = new Uri(absolute.GetLeftPart(UriPartial.Path)); // query+fragment stripped, same rule as NormalizeLink
+        }
         var main = document.QuerySelector("main") ?? document.QuerySelector("article")
             ?? document.QuerySelector("div[role='main']") ?? document.Body!;
-        return new CrawledPage(ToMarkdown.Convert(main.InnerHtml).Trim(), noIndex);
+        return new CrawledPage(ToMarkdown.Convert(main.InnerHtml).Trim(), noIndex, lang, canonical);
     }
 
     private static IEnumerable<Uri> ExtractLinks(string html, Uri baseUrl)
