@@ -320,3 +320,117 @@ public sealed class EscalationDispatcherTests
         Assert.Null(record); // shutdown: cancellation propagates as null, never a fabricated failed record
     }
 }
+
+/// <summary>
+/// Pipeline wiring: the dispatcher runs only after an escalate verdict, records
+/// its outcome on the result object, and counts as a model call. Default-off
+/// (no dispatcher) stays byte-identical; a resolve verdict never dispatches.
+/// </summary>
+public sealed class EscalationPipelineTests : IDisposable
+{
+    private readonly string _dbPath = Path.Combine(Path.GetTempPath(), $"cs-agent-escalation-{Guid.NewGuid():N}.db");
+
+    public void Dispose()
+    {
+        if (File.Exists(_dbPath)) File.Delete(_dbPath);
+    }
+
+    private const string ResolvedJson =
+        """[{"claim":"Keys rotate from Settings","supported":true,"supporting_chunk_ids":[1]},{"claim":"Old keys stay valid 24 hours","supported":true,"supporting_chunk_ids":[1]}]""";
+    private const string EscalateJson =
+        """[{"claim":"Keys rotate from Settings","supported":true,"supporting_chunk_ids":[1]},{"claim":"SLA uptime is 99.9%","supported":false,"supporting_chunk_ids":[]}]""";
+    private const string EscalateDraft = "Rotate from Settings [1]. SLA uptime is 99.9%.";
+
+    private void SeedStore()
+    {
+        using var store = new SqliteVectorStore(_dbPath, "fake-embedding");
+        store.UpsertPage("docs/api-keys.md", "h1", new[]
+        {
+            ("Rotate keys from Settings → API keys → Rotate.", FakeEmbeddingGenerator.HashToVector("rotate settings")),
+            ("Keys inherit the team role. Read-only keys cannot deploy.", FakeEmbeddingGenerator.HashToVector("roles permissions")),
+        });
+    }
+
+    private AskPipeline MakePipeline(string verifyJson, EscalationDispatcher? escalation = null)
+    {
+        SeedStore();
+        var retriever = new Retriever(
+            new FakeEmbeddingGenerator(), new SqliteVectorStore(_dbPath, "fake-embedding"), topK: 5);
+        ChatClientAgent Draft() => new(new FakeChatClient(_ => EscalateDraft));
+        ChatClientAgent Verify() => new(new FakeChatClient(_ => verifyJson));
+        return new AskPipeline(Draft, Verify, retriever, escalation: escalation);
+    }
+
+    private static (EscalationDispatcher Dispatcher, ToolCallChatClient Client) MakeDispatcher(CapturingHandler handler)
+    {
+        var client = new ToolCallChatClient("file_ticket", new Dictionary<string, object?>
+        {
+            ["title"] = "SLA uptime question",
+            ["body"] = "User asked about SLA uptime; docs lack it.",
+        });
+        return (new EscalationDispatcher(
+            (_, tool) => client.AsAIAgent(name: "Escalation", tools: [tool]),
+            new Uri("https://hooks.example.com/x"), handler), client);
+    }
+
+    [Fact]
+    public void Escalate_Enabled_RecordsActionVerdictUntouchedCallsPlusOne()
+    {
+        // baseline: same ask with the feature off — the verdict must not move
+        var baseline = MakePipeline(EscalateJson).Run("What is your SLA uptime?");
+        // the receiver takes real time (500ms) — proving seconds includes the action
+        var handler = new CapturingHandler(async (_, ct) =>
+        {
+            await Task.Delay(500, ct);
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK);
+        });
+        var (dispatcher, _) = MakeDispatcher(handler);
+        var result = MakePipeline(EscalateJson, dispatcher).Run("What is your SLA uptime?");
+
+        Assert.False(result.Resolved);
+        Assert.NotNull(result.EscalationAction);
+        Assert.Equal("sent", result.EscalationAction!.Status);
+        Assert.Equal("SLA uptime question", result.EscalationAction.Title);
+        Assert.Equal("HTTP 200", result.EscalationAction.Detail);
+        Assert.Equal(baseline.Calls + 1, result.Calls); // the escalation agent is the 4th call
+        // verdict byte-identical to the no-action escalate result
+        Assert.Equal(baseline.Question, result.Question);
+        Assert.Equal(baseline.Resolved, result.Resolved);
+        Assert.Equal(baseline.Answer, result.Answer);
+        Assert.Equal(baseline.Missing, result.Missing);
+        // claims carry int[] fields (reference equality) — compare on the wire form
+        Assert.Equal(
+            JsonSerializer.Serialize(baseline.Claims, CsAgentJson.SerializerOptions),
+            JsonSerializer.Serialize(result.Claims, CsAgentJson.SerializerOptions));
+        Assert.Equal(baseline.CitedChunks, result.CitedChunks);
+        // the 500ms receiver sits inside the measured window (Task.Delay never fires
+        // early; the margin only absorbs scheduling noise) — jitter-proof pin on
+        // "stopwatch stops after the action"
+        Assert.True(result.Seconds >= 0.45, $"seconds must include the action (honest wall time), got {result.Seconds}");
+        Assert.NotNull(handler.LastBody); // the ticket actually POSTed
+    }
+
+    [Fact]
+    public void Resolve_Enabled_DispatcherNeverInvoked()
+    {
+        var handler = new CapturingHandler((_, _) =>
+            Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)));
+        var (dispatcher, escalationClient) = MakeDispatcher(handler);
+        var result = MakePipeline(ResolvedJson, dispatcher).Run("How do I rotate the API key?");
+
+        Assert.True(result.Resolved);
+        Assert.Null(result.EscalationAction); // a resolve verdict dispatches nothing
+        Assert.Equal(2, result.Calls);
+        Assert.Equal(0, escalationClient.CallCount);
+        Assert.Null(handler.LastRequest); // no POST ever left the process
+    }
+
+    [Fact]
+    public void Off_NoEscalationActionInSerializedResult()
+    {
+        var result = MakePipeline(EscalateJson).Run("What is your SLA uptime?");
+        Assert.Null(result.EscalationAction);
+        var json = JsonSerializer.Serialize(result, CsAgentJson.SerializerOptions);
+        Assert.DoesNotContain("escalation_action", json); // default-off is byte-identical to today
+    }
+}

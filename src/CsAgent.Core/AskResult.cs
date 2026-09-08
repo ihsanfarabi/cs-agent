@@ -58,7 +58,8 @@ public sealed class AskPipeline(
     Func<AIAgent> verifyAgentFactory,
     Retriever retriever,
     Action<string>? progress = null,
-    TimeSpan? modelCallTimeout = null)
+    TimeSpan? modelCallTimeout = null,
+    EscalationDispatcher? escalation = null)
 {
     private readonly TimeSpan _modelCallTimeout = modelCallTimeout ?? ModelCallTimeout.Default;
     public AskResult Run(string question, CancellationToken cancellationToken = default)
@@ -88,8 +89,6 @@ public sealed class AskPipeline(
         progress?.Invoke("verifying");
         var (claims, verifierRaw, verifierTimedOut) = VerifyOnce(question, answer, chunks, cancellationToken);
 
-        stopwatch.Stop();
-
         AskResult result;
         if (claims is null)
             // second failure ⇒ fail closed to escalate; the note says which kind
@@ -104,6 +103,19 @@ public sealed class AskPipeline(
         else
             result = new AskResult(question, false, null, VerifierRule.BuildMissing(claims, question),
                 claims, chunks, Calls: 2, stopwatch.Elapsed.TotalSeconds, CostLine());
+
+        // escalation action (opt-in): the verdict is final before this runs and
+        // is never modified — only the outcome of filing the ticket is recorded
+        if (result.Resolved is false && escalation is not null)
+        {
+            var record = escalation.TryDispatch(
+                new EscalationContext(question, result.Missing ?? [], chunks, answer), cancellationToken);
+            stopwatch.Stop(); // honest wall time — seconds includes the action when enabled
+            result = result with { Seconds = stopwatch.Elapsed.TotalSeconds };
+            if (record is not null) // a cancelled dispatch leaves the 3-call result untouched
+                result = result with { EscalationAction = record, Calls = result.Calls + 1 };
+        }
+        else stopwatch.Stop();
 
         return new AskRun(result, new AskEvidence(answer, !result.Resolved, verifierRaw));
     }
