@@ -13,7 +13,12 @@ the demo story, not for real deployment. Hardening earns its keep when
 someone deploys the image for real.
 
 **Trigger:** first report of real-world deployment, or the post-publish
-hardening sweep alongside the reranking upgrade.
+hardening sweep alongside the reranking upgrade. **Trigger note (2026-09-08,
+eng review of the MMR plan):** the reranking upgrade is NOW in flight
+(design-2026-09-08-mmr-diversity.md), so this sweep moment arrived — but the
+entry's other line governs: "hardening earns its keep when someone deploys
+the image for real", and no deployment exists yet. Queued as the next
+increment candidate after MMR ships; not bundled into it.
 
 **Where to start:** `.github/workflows/docker.yml` (add cosign step after
 the push), `Dockerfile` (base swap; ENTRYPOINT unchanged), README
