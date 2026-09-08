@@ -151,12 +151,12 @@ public sealed class IngestPipelineTests : IDisposable
         Assert.Equal(2, summary.PagesIngested);
 
         using var store = new SqliteVectorStore(_dbPath, "fake-embedding");
-        // hash vectors rank arbitrarily — take both and pick by content
-        var hits = store.TopK(FakeEmbeddingGenerator.HashToVector("no heading either"), 2);
+        // hash vectors rank arbitrarily — Pool returns all; pick by content
+        var pool = store.Pool(FakeEmbeddingGenerator.HashToVector("no heading either"));
         Assert.StartsWith("api — ",
-            hits.Single(h => h.Text.Contains("no heading here")).Text);   // last URL segment
+            pool.Single(c => c.Hit.Text.Contains("no heading here")).Hit.Text);   // last URL segment
         Assert.StartsWith("docs.foo.com — ",
-            hits.Single(h => h.Text.Contains("no heading either")).Text); // host for root URLs
+            pool.Single(c => c.Hit.Text.Contains("no heading either")).Hit.Text); // host for root URLs
     }
 
     [Fact]

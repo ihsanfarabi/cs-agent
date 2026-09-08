@@ -310,7 +310,10 @@ installable product with an eval harness.
 1. **Static price table** — `estimated_cost` is an estimate against a static
    table and prints `— (non-default model)` unless both models are priced; no
    per-call token usage is captured yet.
-2. **Plain top-k search** — no reranking or hybrid retrieval.
+2. **Plain vector search + MMR diversity** — clone suppression via maximal
+   marginal relevance (λ = 0.7) is present: versioned-URL near-duplicate
+   chunks no longer flood the top-k. Relevance reranking (cross-encoder or
+   LLM) and hybrid (BM25) retrieval are still absent.
 3. **Hallucination proxy undercounts** — see caveats above.
 4. **Tuning-set numbers are in-sample** — generalization is measured by the
    held-out set above, which stays one-shot (missed questions get replaced,

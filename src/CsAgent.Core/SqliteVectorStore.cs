@@ -4,6 +4,8 @@ namespace CsAgent.Core;
 
 public sealed record ChunkHit(string PagePath, int Ordinal, string Text, float Score);
 
+public sealed record ChunkCandidate(ChunkHit Hit, float[] Vector);
+
 /// <summary>
 /// SQLite file-backed vector store: embeddings as BLOBs, cosine in-process,
 /// one .db per corpus. Page-by-page upsert = idempotent re-ingest.
@@ -93,8 +95,8 @@ public sealed class SqliteVectorStore : IDisposable
         }
     }
 
-    /// <summary>Top-k chunks by cosine against the query vector.</summary>
-    public IReadOnlyList<ChunkHit> TopK(ReadOnlySpan<float> query, int k)
+    /// <summary>Every chunk scored by cosine against the query, relevance-ordered, vectors retained.</summary>
+    public IReadOnlyList<ChunkCandidate> Pool(ReadOnlySpan<float> query)
     {
         if (!HasDocuments)
             throw new CsAgentException(new CsAgentError(
@@ -102,7 +104,7 @@ public sealed class SqliteVectorStore : IDisposable
                 "No documents ingested. Run `cs-agent ingest <path>` first."));
 
         var dim = query.Length;
-        var results = new List<(ChunkHit Hit, float[] Vector)>();
+        var results = new List<ChunkCandidate>();
         using (var cmd = _connection.CreateCommand())
         {
             cmd.CommandText = "SELECT page_path, ordinal, text, embedding FROM chunks";
@@ -110,17 +112,13 @@ public sealed class SqliteVectorStore : IDisposable
             while (reader.Read())
             {
                 var vector = FromBlob((byte[])reader[3], dim);
-                results.Add((
+                results.Add(new ChunkCandidate(
                     new ChunkHit(reader.GetString(0), reader.GetInt32(1), reader.GetString(2),
                         VectorMath.Cosine(query, vector)),
                     vector));
             }
         }
-        return results
-            .OrderByDescending(r => r.Hit.Score)
-            .Take(k)
-            .Select(r => r.Hit)
-            .ToList();
+        return results.OrderByDescending(r => r.Hit.Score).ToList();
     }
 
     public bool HasDocuments

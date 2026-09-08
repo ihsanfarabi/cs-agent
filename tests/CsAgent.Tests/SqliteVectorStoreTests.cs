@@ -13,7 +13,7 @@ public sealed class SqliteVectorStoreTests : IDisposable
     }
 
     [Fact]
-    public void UpsertThenTopK_ReturnsBestMatch()
+    public void UpsertThenPool_ReturnsBestMatchFirst()
     {
         using (var store = new SqliteVectorStore(_dbPath, "text-embedding-3-small"))
         {
@@ -26,11 +26,11 @@ public sealed class SqliteVectorStoreTests : IDisposable
 
         using (var store = new SqliteVectorStore(_dbPath, "text-embedding-3-small"))
         {
-            var hits = store.TopK(new float[] { 0.9f, 0.1f, 0 }, k: 1);
-            var hit = Assert.Single(hits);
-            Assert.Equal("docs/api-keys.md", hit.PagePath);
-            Assert.Equal("Rotating keys from Settings", hit.Text);
-            Assert.True(hit.Score > 0.99f);
+            var pool = store.Pool(new float[] { 0.9f, 0.1f, 0 });
+            var hit = pool[0];
+            Assert.Equal("docs/api-keys.md", hit.Hit.PagePath);
+            Assert.Equal("Rotating keys from Settings", hit.Hit.Text);
+            Assert.True(hit.Hit.Score > 0.99f);
         }
     }
 
@@ -44,17 +44,35 @@ public sealed class SqliteVectorStoreTests : IDisposable
         }
         using (var store = new SqliteVectorStore(_dbPath, "m"))
         {
-            Assert.Equal(2, store.TopK(new float[] { 1, 0 }, k: 50).Count);
+            Assert.Equal(2, store.Pool(new float[] { 1, 0 }).Count);
         }
     }
 
     [Fact]
-    public void EmptyStore_TopK_ThrowsNamedError()
+    public void EmptyStore_Pool_ThrowsNamedError()
     {
         using var store = new SqliteVectorStore(_dbPath, "m");
-        var ex = Assert.Throws<CsAgentException>(() => store.TopK(new float[] { 1, 0 }, 5));
+        var ex = Assert.Throws<CsAgentException>(() => store.Pool(new float[] { 1, 0 }));
         Assert.Equal("empty-store", ex.Error.Code);
         Assert.Contains("ingest", ex.Error.Message);
+    }
+
+    [Fact]
+    public void Pool_ReturnsAllChunks_RelevanceOrdered_WithVectors()
+    {
+        using var store = new SqliteVectorStore(_dbPath, "m");
+        store.UpsertPage("a.md", "h1", new[]
+        {
+            ("one", new float[] { 1, 0 }),
+            ("two", new float[] { 0, 1 }),
+        });
+
+        var pool = store.Pool(new float[] { 0.9f, 0.1f });
+
+        Assert.Equal(2, pool.Count);                        // whole scored set, not top-k
+        Assert.Equal("one", pool[0].Hit.Text);              // relevance-descending
+        Assert.Equal(2, pool[0].Vector.Length);              // vectors retained
+        Assert.True(pool[0].Hit.Score >= pool[1].Hit.Score); // scores monotonic
     }
 
     [Fact]
