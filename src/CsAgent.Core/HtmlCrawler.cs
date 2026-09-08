@@ -144,6 +144,23 @@ public sealed class HtmlCrawler
 
     internal static string CorpusNameFromHost(string host) => host.Replace('.', '-');
 
+    /// <summary>
+    /// Identity key for dedupe: path-only URL with trailing "/" and "/index.html"
+    /// collapsed. Paths keep case (case is content on real servers). Heuristic:
+    /// over-collapses only when a site serves distinct pages under slash twins,
+    /// which no docusaurus-class site does — and every collapse is a recorded
+    /// skip, never silent.
+    /// </summary>
+    internal static string NormalizeIdentity(Uri url)
+    {
+        var path = url.GetLeftPart(UriPartial.Path);
+        if (path.EndsWith("/index.html", StringComparison.OrdinalIgnoreCase))
+            path = path[..^"index.html".Length];
+        if (path.Length > 0 && path != $"{url.Scheme}://{url.Authority}/" && path.EndsWith('/'))
+            path = path[..^1];
+        return path;
+    }
+
     internal static Uri? NormalizeLink(Uri baseUrl, string href)
     {
         if (!Uri.TryCreate(href, UriKind.RelativeOrAbsolute, out var relative)) return null;

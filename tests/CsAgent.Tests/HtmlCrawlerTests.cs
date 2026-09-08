@@ -32,6 +32,18 @@ public sealed class HtmlCrawlerTests
     }
 
     [Fact]
+    public void NormalizeIdentity_CollapsesSlashTwins()
+    {
+        string Id(string url) => HtmlCrawler.NormalizeIdentity(new Uri(url));
+        Assert.Equal(Id("https://docs.foo.com/docs/foo"), Id("https://docs.foo.com/docs/foo/"));
+        Assert.Equal(Id("https://docs.foo.com/docs/foo"), Id("https://docs.foo.com/docs/foo/index.html"));
+        Assert.Equal(Id("https://docs.foo.com/"), Id("https://docs.foo.com")); // root twins too
+        Assert.NotEqual(Id("https://docs.foo.com/docs/foo"), Id("https://docs.foo.com/docs/bar"));
+        Assert.NotEqual(Id("https://docs.foo.com/Docs"), Id("https://docs.foo.com/docs")); // case is content: no case-folding
+        Assert.Equal("https://docs.foo.com/docs/foo", Id("https://docs.foo.com/docs/foo/index.html"));
+    }
+
+    [Fact]
     public async Task ParsePage_SelectsMain_KeepsHeadings()
     {
         var page = await HtmlCrawler.ParsePage(
