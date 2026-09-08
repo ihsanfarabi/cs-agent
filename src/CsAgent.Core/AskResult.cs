@@ -18,7 +18,21 @@ public sealed record AskResult(
     [property: JsonPropertyName("citations")] IReadOnlyList<CitedChunk> CitedChunks,
     [property: JsonPropertyName("calls")] int Calls,
     [property: JsonPropertyName("seconds")] double Seconds,
-    [property: JsonPropertyName("estimated_cost")] string? CostEstimate);
+    [property: JsonPropertyName("estimated_cost")] string? CostEstimate,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [property: JsonPropertyName("escalation_action")]
+    EscalationActionRecord? EscalationAction = null);
+
+/// <summary>
+/// What the escalation agent did after an escalate verdict: which tool ran,
+/// whether the ticket reached the webhook, and the agent-composed title or the
+/// failure reason. Never fabricated — absent means no action was attempted.
+/// </summary>
+public sealed record EscalationActionRecord(
+    [property: JsonPropertyName("tool")] string Tool,
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("title")] string? Title,
+    [property: JsonPropertyName("detail")] string? Detail);
 
 /// <summary>
 /// The optional audit trace for one completed ask. Retrieved chunks and
