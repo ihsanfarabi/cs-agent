@@ -38,6 +38,29 @@ the zh-CN garbage path is dead by construction (those pages are never
 ingested), but shape (b) may still recur; the hybrid/rerank decision input
 is now measured against a clean corpus.
 
+**Hybrid/rerank decision (closed 2026-09-08): DO-NOTHING.** Probe on the
+clean post-hygiene store (`cs-agent-docusaurus-io.db`, 3,210 chunks), 10
+asks + re-runs. In-domain: navbar/versioning/i18n resolved with correct-page
+citations; deploy — retrieval perfect (`/docs/deployment` top-1 at 0.837;
+raw top-8 inspected, zero model calls) and both escalates were verifier-route
+stalls failing closed (the 240s ceiling fired, 577s wall); Mermaid — the
+answer page (`/docs/markdown-features/diagrams`) was NEVER INGESTED: the
+corpus is exactly 200 pages (crawl cap) and the markdown-features family
+reached only `toc`, so the escalates are correct honest behavior — blog
+release posts + migration page in top-8 is the best available content, and
+the one resolved run cited release 2.2, a legit page that answers the
+question. Out-of-domain ×5 (SLA, pricing, Stripe API, support phone,
+roadmap): 5/5 escalate, zero false resolves. Verdict: no observed miss
+anywhere the answer page was actually in the corpus → plain top-k + MMR
+holds; README limitation #2 stays. Revisit trigger: first genuine live
+in-domain miss on a clean corpus WITH the answer page present. Probe
+side-findings: (1) crawl-cap truncation — docusaurus.io needs more than 200
+pages, deeper docs are missing (documented limit; future probes must author
+questions against ingested pages only); (2) versioned-docs duplicates
+(`/docs/3.x.y/cli` ×7, ~0.799 each) flood the pool — same class as
+the deferred URL canonicalization, harmless at current scale (current
+`/docs/cli` also present, top-1 correct on the deploy probe).
+
 **Side finding (fixed same day):** the same investigation reproduced an
 unbounded provider stall — an OpenRouter route accepts the verify call
 (json_schema response_format with MAF's embedded `$schema` keys), returns 200
