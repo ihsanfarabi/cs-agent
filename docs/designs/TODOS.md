@@ -12,11 +12,17 @@ HTML-soup chunks (`<div class="browserWindowMenuIcon_Vhuh">`, SVG path data);
 (b) draft over-declining on good chunks — a versioning question cited
 docusaurus.io/versions at 0.72 and the draft declined anyway.
 
-**Where this goes:** shape (a) belongs to the already-deferred retrieval
-upgrades (reranking/hybrid, ingest-time URL canonicalization) plus a possible
-crawl-time language filter (localized pages polluting the corpus). Shape (b)
-is draft-model judgment on the default pair — revisit only after (a), when
-retrieval is clean. No separate verifier work.
+**Where this goes:** shape (a) hygiene SHIPPED 2026-09-08
+(design-2026-09-08-ingest-hygiene.md, plan 2026-09-08-ingest-hygiene.md):
+the crawl now skips non-English pages (`<html lang>` filter, English-only v1
+cut, no env override) and dedupes page identities (same-host `<link
+rel=canonical>` + trailing-slash/`index.html` twins) — both recorded as
+`skipped:` lines in the ingest summary. Live measurement on a fresh
+docusaurus crawl recorded below. The remaining shape-(a) residual — legit
+pages (blog release posts, nav chrome) polluting top-8 on out-of-domain
+questions — is the input to the deferred hybrid/rerank decision, which stays
+behind that measurement. Shape (b) is draft-model judgment on the default
+pair — revisit only after retrieval is clean. No separate verifier work.
 
 **Side finding (fixed same day):** the same investigation reproduced an
 unbounded provider stall — an OpenRouter route accepts the verify call

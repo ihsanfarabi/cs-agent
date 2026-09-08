@@ -97,7 +97,16 @@ markdown-converted content into a host-derived corpus (`docs.example.com` →
 v1). robots.txt is fetched and obeyed — `User-agent: *` plus an explicit
 `cs-agent` group, prefix `Disallow` matching (no wildcards or `Allow` in v1);
 an absent robots.txt allows, a 5xx robots.txt fails closed with no fetches.
-`<meta name="robots" content="noindex">` pages are skipped.
+`<meta name="robots" content="noindex">` pages are skipped. The crawl is
+English-only: pages whose `<html lang>` attribute tags a non-English locale
+(`zh-CN`, `fr`, …) are skipped at fetch and listed in the ingest summary as
+`skipped: … non-English page`; pages without a `lang` attribute are allowed
+(English-default assumption). Local-path ingest of your own non-English
+documents is unaffected — this filters the crawl surface only, and there is
+no env override in v1. Pages whose canonical link (`<link rel="canonical">`,
+same-host only) duplicates an already-ingested page, and
+trailing-slash/`index.html` twins of the same path, are deduped the same
+way (`skipped: … duplicate of …`).
 
 Re-running the same URL resumes at the pipeline level: the crawl re-walks the
 site's links (HTTP fetch, same 1 req/s pace), and pages whose content hash is
