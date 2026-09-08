@@ -433,4 +433,22 @@ public sealed class EscalationPipelineTests : IDisposable
         var json = JsonSerializer.Serialize(result, CsAgentJson.SerializerOptions);
         Assert.DoesNotContain("escalation_action", json); // default-off is byte-identical to today
     }
+
+    [Fact]
+    public void Escalate_FailedAction_VerdictUnchangedFailedRecordRides()
+    {
+        var baseline = MakePipeline(EscalateJson).Run("What is your SLA uptime?");
+        var handler = new CapturingHandler((_, _) =>
+            Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.ServiceUnavailable)));
+        var (dispatcher, _) = MakeDispatcher(handler);
+        var result = MakePipeline(EscalateJson, dispatcher).Run("What is your SLA uptime?");
+
+        Assert.False(result.Resolved); // a failed ticket never flips the verdict
+        Assert.Equal(baseline.Missing, result.Missing);
+        Assert.Null(result.Answer);
+        Assert.NotNull(result.EscalationAction);
+        Assert.Equal("failed", result.EscalationAction!.Status);
+        Assert.Equal("HTTP 503", result.EscalationAction.Detail);
+        Assert.Equal(baseline.Calls + 1, result.Calls); // the attempt still counts
+    }
 }

@@ -1,6 +1,8 @@
 using System.Text.Json;
 using CsAgent.Core;
 using CsAgent.Mcp;
+using Microsoft.Agents.AI;
+using Microsoft.Extensions.AI;
 using Xunit;
 
 namespace CsAgent.Tests;
@@ -80,6 +82,51 @@ public class CsAgentToolTests : IDisposable
         Assert.False(root.GetProperty("resolved").GetBoolean());
         Assert.Equal(JsonValueKind.Null, root.GetProperty("answer").ValueKind);
         Assert.NotEmpty(root.GetProperty("missing").EnumerateArray());
+        Assert.False(root.TryGetProperty("escalation_action", out _)); // feature off: today's fields only
+    }
+
+    [Fact]
+    public void AskTool_EscalateWithAction_ExposesEscalationAction()
+    {
+        // the MCP serializer pins DefaultIgnoreCondition=Never — the field's own
+        // WhenWritingNull attribute must still omit null and expose the action
+        var store = new SqliteVectorStore(_dbPath, "fake-embedding");
+        store.UpsertPage("docs/api-keys.md", "h1", new[]
+        {
+            ("Rotate keys from Settings → API keys → Rotate.", FakeEmbeddingGenerator.HashToVector("rotate settings")),
+        });
+        var toolClient = new ToolCallChatClient("file_ticket", new Dictionary<string, object?>
+        {
+            ["title"] = "SLA uptime question",
+            ["body"] = "User asked about SLA uptime; docs lack it.",
+        });
+        var handler = new CapturingHandler((_, _) =>
+            Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)));
+        var escalation = new EscalationDispatcher(
+            (_, tool) => toolClient.AsAIAgent(name: "Escalation", tools: [tool]),
+            new Uri("https://hooks.example.com/x"), handler);
+        var retriever = new Retriever(new FakeEmbeddingGenerator(),
+            new SqliteVectorStore(_dbPath, "fake-embedding"), topK: 5);
+        var pipeline = new AskPipeline(
+            () => new Microsoft.Agents.AI.ChatClientAgent(
+                new FakeChatClient(_ => "Rotate from Settings [1]. SLA uptime is 99.9%.")),
+            () => new Microsoft.Agents.AI.ChatClientAgent(
+                new FakeChatClient(_ => """[{"claim":"SLA uptime is 99.9%","supported":false,"supporting_chunk_ids":[]}]""")),
+            retriever, escalation: escalation);
+        var toolbox = new CsAgentToolbox(() => pipeline);
+
+        var json = CsAgentTools.Ask(toolbox, "What is your SLA uptime?");
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+
+        Assert.False(root.GetProperty("resolved").GetBoolean());
+        var action = root.GetProperty("escalation_action"); // the action rides the record, free
+        Assert.Equal("file_ticket", action.GetProperty("tool").GetString());
+        Assert.Equal("sent", action.GetProperty("status").GetString());
+        Assert.Equal("SLA uptime question", action.GetProperty("title").GetString());
+        Assert.Equal("HTTP 200", action.GetProperty("detail").GetString());
+        Assert.Equal(3, root.GetProperty("calls").GetInt32());
+        Assert.NotNull(handler.LastBody);
     }
 
     [Fact]
